@@ -35,7 +35,7 @@ pub use frame_support::{
 	},
 	StorageValue,
 };
-pub use frame_system::Call as SystemCall;
+pub use frame_system::{Call as SystemCall, EnsureRoot};
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
 use pallet_transaction_payment::CurrencyAdapter;
@@ -265,6 +265,75 @@ impl pallet_sudo::Config for Runtime {
 	type Call = Call;
 }
 
+parameter_types! {
+	pub const AssetDeposit: Balance = Balance::MAX;
+	// TODO: How much account should deposit for a given asset cost?
+	pub const AssetAccountDeposit: Balance = 1_000;
+	// TODO: how much deposit should delegated transfer cost?
+	pub const ApprovalDeposit: Balance = 1_000;
+	pub const MetadataDepositBase: Balance = 0;
+	pub const MetadataDepositPerByte: Balance = 0;
+}
+
+impl pallet_assets::Config for Runtime {
+	type Event = Event;
+	type Balance = Balance;
+	type AssetId = u32;
+	type Currency = Balances;
+	type ForceOrigin = EnsureRoot<AccountId>;
+	type AssetDeposit = AssetDeposit;
+	type AssetAccountDeposit = AssetAccountDeposit;
+	type MetadataDepositBase = MetadataDepositBase;
+	type MetadataDepositPerByte = MetadataDepositPerByte;
+	type ApprovalDeposit = ApprovalDeposit;
+	type StringLimit = frame_support::traits::ConstU32<20>;
+	type Freezer = ();
+	type Extra = ();
+	type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
+}
+
+// parameter_types! {
+// 	pub MaximumSchedulerWeight: Weight = Perbill::from_percent(80) * BlockWeights::get().max_block;
+// 	pub const MaxScheduledPerBlock: u32 = 50;
+// 	pub const NoPreimagePostponement: Option<u32> = Some(10);
+// }
+
+// /// Used the compare the privilege of an origin inside the scheduler.
+// pub struct OriginPrivilegeCmp;
+
+// impl PrivilegeCmp<OriginCaller> for OriginPrivilegeCmp {
+// 	fn cmp_privilege(left: &OriginCaller, right: &OriginCaller) -> Option<Ordering> {
+// 		if left == right {
+// 			return Some(Ordering::Equal)
+// 		}
+
+// 		match (left, right) {
+// 			// Root is greater than anything.
+// 			(OriginCaller::system(frame_system::RawOrigin::Root), _) => Some(Ordering::Greater),
+// 			// Check which one has more yes votes.
+// 			(
+// 				OriginCaller::Council(pallet_collective::RawOrigin::Members(l_yes_votes, l_count)),
+// 				OriginCaller::Council(pallet_collective::RawOrigin::Members(r_yes_votes, r_count)),
+// 			) => Some((l_yes_votes * r_count).cmp(&(r_yes_votes * l_count))),
+// 			// For every other origin we don't care, as they are not used for `ScheduleOrigin`.
+// 			_ => None,
+// 		}
+// 	}
+// }
+
+// impl pallet_scheduler::Config for Runtime {
+// 	type RuntimeOrigin = RuntimeOrigin;
+// 	type RuntimeEvent = RuntimeEvent;
+// 	type PalletsOrigin = OriginCaller;
+// 	type RuntimeCall = RuntimeCall;
+// 	type MaximumWeight = MaximumSchedulerWeight;
+// 	type ScheduleOrigin = EnsureRoot<AccountId>;
+// 	type MaxScheduledPerBlock = MaxScheduledPerBlock;
+// 	type WeightInfo = weights::pallet_scheduler::WeightInfo<Runtime>;
+// 	type OriginPrivilegeCmp = OriginPrivilegeCmp;
+// 	type Preimages = ();
+// }
+
 /// Configure the pallet-faterium-polls in pallets/faterium-polls.
 impl pallet_faterium_polls::Config for Runtime {
 	type Event = Event;
@@ -279,16 +348,18 @@ construct_runtime!(
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
 		// Default substrate-node-template pallets
-		System: frame_system,
-		RandomnessCollectiveFlip: pallet_randomness_collective_flip,
-		Timestamp: pallet_timestamp,
-		Aura: pallet_aura,
-		Grandpa: pallet_grandpa,
-		Balances: pallet_balances,
-		TransactionPayment: pallet_transaction_payment,
-		Sudo: pallet_sudo,
-		// Faterium Crowndfunding Polls pallet.
-		Polls: pallet_faterium_polls,
+		System: frame_system = 0,
+		Timestamp: pallet_timestamp = 1,
+		Aura: pallet_aura = 2,
+		Grandpa: pallet_grandpa = 3,
+		Balances: pallet_balances = 4,
+		TransactionPayment: pallet_transaction_payment = 5,
+		Sudo: pallet_sudo = 6,
+		RandomnessCollectiveFlip: pallet_randomness_collective_flip = 7,
+		// Pallets use by Faterium
+		Assets: pallet_assets = 8,
+		// Scheduler: pallet_scheduler = 9,
+		FateriumPolls: pallet_faterium_polls = 10,
 	}
 );
 
@@ -333,6 +404,7 @@ mod benches {
 		[frame_system, SystemBench::<Runtime>]
 		[pallet_balances, Balances]
 		[pallet_timestamp, Timestamp]
+		[pallet_assets, Assets]
 		[pallet_faterium_polls, FateriumPolls]
 	);
 }
