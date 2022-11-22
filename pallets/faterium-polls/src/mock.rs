@@ -51,6 +51,10 @@ impl system::Config for Test {
 
 impl pallet_faterium_polls::Config for Test {
 	type Event = Event;
+	type Balance = u64;
+	type AssetId = u32;
+	type Currency = ();
+	type PollId = u64;
 }
 
 // Build genesis storage according to the mock runtime.
