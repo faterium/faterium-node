@@ -2,6 +2,9 @@
 // `construct_runtime!` does a lot of recursion and requires us to increase the limit to 256.
 #![recursion_limit = "256"]
 
+// Weights used in the runtime.
+mod weights;
+
 // Make the WASM binary available.
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
@@ -292,47 +295,25 @@ impl pallet_assets::Config for Runtime {
 	type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
 }
 
-// parameter_types! {
-// 	pub MaximumSchedulerWeight: Weight = Perbill::from_percent(80) * BlockWeights::get().max_block;
-// 	pub const MaxScheduledPerBlock: u32 = 50;
-// 	pub const NoPreimagePostponement: Option<u32> = Some(10);
-// }
+parameter_types! {
+	pub MaximumSchedulerWeight: Weight = Perbill::from_percent(80) * BlockWeights::get().max_block;
+	pub const MaxScheduledPerBlock: u32 = 50;
+	pub const NoPreimagePostponement: Option<u32> = None;
+}
 
-// /// Used the compare the privilege of an origin inside the scheduler.
-// pub struct OriginPrivilegeCmp;
-
-// impl PrivilegeCmp<OriginCaller> for OriginPrivilegeCmp {
-// 	fn cmp_privilege(left: &OriginCaller, right: &OriginCaller) -> Option<Ordering> {
-// 		if left == right {
-// 			return Some(Ordering::Equal)
-// 		}
-
-// 		match (left, right) {
-// 			// Root is greater than anything.
-// 			(OriginCaller::system(frame_system::RawOrigin::Root), _) => Some(Ordering::Greater),
-// 			// Check which one has more yes votes.
-// 			(
-// 				OriginCaller::Council(pallet_collective::RawOrigin::Members(l_yes_votes, l_count)),
-// 				OriginCaller::Council(pallet_collective::RawOrigin::Members(r_yes_votes, r_count)),
-// 			) => Some((l_yes_votes * r_count).cmp(&(r_yes_votes * l_count))),
-// 			// For every other origin we don't care, as they are not used for `ScheduleOrigin`.
-// 			_ => None,
-// 		}
-// 	}
-// }
-
-// impl pallet_scheduler::Config for Runtime {
-// 	type RuntimeOrigin = RuntimeOrigin;
-// 	type RuntimeEvent = RuntimeEvent;
-// 	type PalletsOrigin = OriginCaller;
-// 	type RuntimeCall = RuntimeCall;
-// 	type MaximumWeight = MaximumSchedulerWeight;
-// 	type ScheduleOrigin = EnsureRoot<AccountId>;
-// 	type MaxScheduledPerBlock = MaxScheduledPerBlock;
-// 	type WeightInfo = weights::pallet_scheduler::WeightInfo<Runtime>;
-// 	type OriginPrivilegeCmp = OriginPrivilegeCmp;
-// 	type Preimages = ();
-// }
+impl pallet_scheduler::Config for Runtime {
+	type Event = Event;
+	type Origin = Origin;
+	type PalletsOrigin = OriginCaller;
+	type Call = Call;
+	type MaximumWeight = MaximumSchedulerWeight;
+	type ScheduleOrigin = EnsureRoot<AccountId>;
+	type MaxScheduledPerBlock = MaxScheduledPerBlock;
+	type WeightInfo = weights::pallet_scheduler::WeightInfo<Runtime>;
+	type OriginPrivilegeCmp = frame_support::traits::EqualPrivilegeOnly;
+	type PreimageProvider = ();
+	type NoPreimagePostponement = NoPreimagePostponement;
+}
 
 /// Configure the pallet-faterium-polls in pallets/faterium-polls.
 impl pallet_faterium_polls::Config for Runtime {
@@ -358,7 +339,7 @@ construct_runtime!(
 		RandomnessCollectiveFlip: pallet_randomness_collective_flip = 7,
 		// Pallets use by Faterium
 		Assets: pallet_assets = 8,
-		// Scheduler: pallet_scheduler = 9,
+		Scheduler: pallet_scheduler = 9,
 		FateriumPolls: pallet_faterium_polls = 10,
 	}
 );
@@ -405,6 +386,7 @@ mod benches {
 		[pallet_balances, Balances]
 		[pallet_timestamp, Timestamp]
 		[pallet_assets, Assets]
+		[pallet_scheduler, Scheduler]
 		[pallet_faterium_polls, FateriumPolls]
 	);
 }
