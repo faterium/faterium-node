@@ -38,3 +38,10 @@ pub struct PollDetails<PollId, Balance, AccountId, AssetId, BlockNumber> {
 	pub(super) poll_start: BlockNumber,
 	pub(super) poll_end: BlockNumber,
 }
+
+/// A vote for a referendum of a particular account.
+#[derive(Encode, Decode, Copy, Clone, Eq, PartialEq, RuntimeDebug, TypeInfo)]
+pub enum AccountVote<Balance> {
+	/// A standard vote, one-way (approve or reject) with a given amount of conviction.
+	Standard { option: u8, balance: Balance },
+}
