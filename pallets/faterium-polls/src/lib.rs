@@ -113,6 +113,12 @@ pub mod pallet {
 	pub enum Event<T: Config> {
 		/// A poll was created.
 		Created { poll_id: T::PollIndex, creator: T::AccountId },
+		/// A poll has been cancelled.
+		Cancelled { poll_id: T::PollIndex },
+		/// An account has voted in a poll.
+		Voted { voter: T::AccountId, poll_id: T::PollIndex, vote: AccountVote<T::Balance> },
+		/// An account has voted in a poll.
+		VoteRemoved { voter: T::AccountId, poll_id: T::PollIndex },
 	}
 
 	#[pallet::error]
@@ -144,7 +150,7 @@ pub mod pallet {
 			_poll_end: <T as frame_system::Config>::BlockNumber,
 		) -> DispatchResult {
 			// Check that the extrinsic was signed and get the signer.
-			let creator = ensure_signed(origin)?;
+			let who = ensure_signed(origin)?;
 
 			// TODO: Check and validate params
 
@@ -162,23 +168,56 @@ pub mod pallet {
 			<PollCount<T>>::put(next_id);
 
 			// Emit an event.
-			Self::deposit_event(Event::Created { poll_id, creator });
+			Self::deposit_event(Event::Created { poll_id, creator: who });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
+		pub fn emergency_cancel(
+			origin: OriginFor<T>,
+			#[pallet::compact] poll_id: T::PollIndex,
+		) -> DispatchResult {
+			let _who = ensure_signed(origin)?;
+
+			// TODO: Get and check poll by poll_id
+			// TODO: Check if origin is entitled to cancel the poll
+			// TODO: Cancel dispatch
+			// TODO: Update Polls storage and set status to Cancelled
+
+			Self::deposit_event(Event::<T>::Cancelled { poll_id });
 			Ok(())
 		}
 
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn vote(
 			origin: OriginFor<T>,
-			#[pallet::compact] _poll_id: T::PollIndex,
-			_vote: AccountVote<T::Balance>,
+			#[pallet::compact] poll_id: T::PollIndex,
+			vote: AccountVote<T::Balance>,
 		) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
+			let who = ensure_signed(origin)?;
 
-			// TODO: Validate vote struct
+			// TODO: Validate AccountVote param
+			// TODO: Get and check poll by poll_id
+			// TODO: Reserve voter's Currency balance
+
+			// Emit an event.
+			Self::deposit_event(Event::Voted { voter: who, poll_id, vote });
+			// TODO: Remove error.
+			Err(Error::<T>::NoneValue.into())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
+		pub fn remove_vote(
+			origin: OriginFor<T>,
+			#[pallet::compact] poll_id: T::PollIndex,
+		) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
 			// TODO: Get and check poll by poll_id
 
-			// TODO: Remove error and emit an event
-			Err(Error::<T>::NoneValue.into())
+			// Emit an event.
+			Self::deposit_event(Event::VoteRemoved { voter: who, poll_id });
+			Ok(())
 		}
 	}
 }

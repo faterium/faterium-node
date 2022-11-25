@@ -2,21 +2,23 @@
 
 mod voting;
 
-use crate as pallet_faterium_polls;
+use crate::{self as pallet_faterium_polls, *};
+use codec::Encode;
 use frame_support::{
-	parameter_types,
-	traits::{ConstU16, ConstU32, ConstU64, EqualPrivilegeOnly},
+	assert_ok, parameter_types,
+	traits::{ConstU16, ConstU32, ConstU64, EqualPrivilegeOnly, Hooks},
 	weights::Weight,
 };
 use sp_core::H256;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
-	Perbill,
+	DispatchResult, Perbill,
 };
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
+type PollIndex = u64;
 
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
@@ -96,7 +98,7 @@ impl pallet_faterium_polls::Config for Test {
 	type Balance = u64;
 	type AssetId = u32;
 	type Currency = pallet_balances::Pallet<Self>;
-	type PollIndex = u64;
+	type PollIndex = PollIndex;
 	type Scheduler = Scheduler;
 	type PalletsOrigin = OriginCaller;
 }
@@ -105,4 +107,43 @@ impl pallet_faterium_polls::Config for Test {
 pub fn new_test_ext() -> sp_io::TestExternalities {
 	let t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 	t.into()
+}
+
+fn next_block() {
+	System::set_block_number(System::block_number() + 1);
+	Scheduler::on_initialize(System::block_number());
+	FateriumPolls::begin_block(System::block_number());
+}
+
+fn fast_forward_to(n: u64) {
+	while System::block_number() < n {
+		next_block();
+	}
+}
+
+fn set_balance_proposal(value: u64) -> Vec<u8> {
+	Call::Balances(pallet_balances::Call::set_balance { who: 42, new_free: value, new_reserved: 0 })
+		.encode()
+}
+
+fn propose_set_balance(who: u64, value: u64) -> DispatchResult {
+	set_balance_proposal(value);
+	FateriumPolls::create_poll(
+		Origin::signed(who),
+		vec![],
+		3,
+		PollCurrency::Native,
+		vec![],
+		RewardSettings::None,
+		100,
+		10,
+		20,
+	)
+}
+
+fn begin_poll() -> PollIndex {
+	System::set_block_number(0);
+	assert_ok!(propose_set_balance(1, 2));
+	fast_forward_to(2);
+	0
 }
