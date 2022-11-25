@@ -5,7 +5,7 @@ mod voting;
 use crate::{self as pallet_faterium_polls, *};
 use codec::Encode;
 use frame_support::{
-	assert_ok, parameter_types,
+	assert_noop, assert_ok, parameter_types,
 	traits::{ConstU16, ConstU32, ConstU64, EqualPrivilegeOnly, Hooks},
 	weights::Weight,
 };
@@ -146,4 +146,17 @@ fn begin_poll() -> PollIndex {
 	assert_ok!(propose_set_balance(1, 2));
 	fast_forward_to(2);
 	0
+}
+
+#[test]
+fn params_should_work() {
+	new_test_ext().execute_with(|| {
+		assert_eq!(FateriumPolls::poll_count(), 0);
+		assert_eq!(Balances::free_balance(0), 0);
+		assert_eq!(Balances::total_issuance(), 0);
+	});
+}
+
+fn tally(r: PollIndex) -> Tally<u64> {
+	FateriumPolls::poll_details_of(r).unwrap().tally
 }

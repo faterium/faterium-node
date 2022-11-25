@@ -34,9 +34,10 @@ pub struct PollDetails<PollId, Balance, AccountId, AssetId, BlockNumber> {
 	pub(super) currency: PollCurrency<AssetId>,
 	pub(super) beneficiaries: Vec<(AccountId, u32)>,
 	pub(super) reward_settings: RewardSettings,
-	pub(super) goal: Balance,
 	pub(super) poll_start: BlockNumber,
 	pub(super) poll_end: BlockNumber,
+	pub(super) goal: Balance,
+	pub(super) tally: Tally<Balance>,
 }
 
 /// A vote for a referendum of a particular account.
@@ -44,4 +45,26 @@ pub struct PollDetails<PollId, Balance, AccountId, AssetId, BlockNumber> {
 pub enum AccountVote<Balance> {
 	/// A standard vote, one-way (approve or reject) with a given amount of conviction.
 	Standard { option: u8, balance: Balance },
+}
+
+/// Info regarding an ongoing referendum.
+#[derive(Encode, Decode, Default, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub struct Tally<Balance> {
+	/// The sum of all options.
+	pub sum: Balance,
+	/// The vector of sorted options' stake.
+	pub options_votes: Vec<Balance>,
+}
+
+/// An indicator for what an account is doing.
+#[derive(Encode, Decode, Clone, Eq, PartialEq, RuntimeDebug, TypeInfo)]
+pub struct Voting<PollIndex, Balance> {
+	/// The current votes of the account.
+	pub votes: Vec<(PollIndex, AccountVote<Balance>)>,
+}
+
+impl<Balance: Default, AccountId> Default for Voting<Balance, AccountId> {
+	fn default() -> Self {
+		Voting { votes: Vec::new() }
+	}
 }

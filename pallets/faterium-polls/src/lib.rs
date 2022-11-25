@@ -95,7 +95,8 @@ pub mod pallet {
 
 	/// Details of a poll.
 	#[pallet::storage]
-	pub(super) type Polls<T: Config> = StorageMap<
+	#[pallet::getter(fn poll_details_of)]
+	pub(super) type PollDetailsOf<T: Config> = StorageMap<
 		_,
 		Blake2_128Concat,
 		T::PollIndex,
@@ -107,6 +108,12 @@ pub mod pallet {
 			<T as frame_system::Config>::BlockNumber,
 		>,
 	>;
+
+	/// All votes for a particular voter. We store the balance for the number of votes that we
+	/// have recorded. The second item is the total amount of delegations, that will be added.
+	#[pallet::storage]
+	pub type VotingOf<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, Voting<T::PollIndex, T::Balance>, ValueQuery>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -125,6 +132,11 @@ pub mod pallet {
 	pub enum Error<T> {
 		/// Error names should be descriptive.
 		NoneValue,
+		/// Too high a balance was provided that the account cannot afford.
+		InsufficientFunds,
+		/// The account currently has votes attached to it and the operation cannot succeed until
+		/// these are removed through `remove_vote`.
+		VotesExist,
 	}
 
 	#[pallet::hooks]
@@ -214,6 +226,7 @@ pub mod pallet {
 			let who = ensure_signed(origin)?;
 
 			// TODO: Get and check poll by poll_id
+			// TODO: Remove vote
 
 			// Emit an event.
 			Self::deposit_event(Event::VoteRemoved { voter: who, poll_id });

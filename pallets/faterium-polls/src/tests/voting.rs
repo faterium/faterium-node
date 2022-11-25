@@ -1,32 +1,42 @@
+//! The tests for normal voting functionality.
+
 use super::*;
-use frame_support::assert_noop;
 
 #[test]
-fn it_works_for_default_value() {
+fn overvoting_should_fail() {
 	new_test_ext().execute_with(|| {
-		begin_poll();
-		// Read pallet storage and assert an expected result.
-		assert_eq!(FateriumPolls::poll_count(), 1);
-		// Ensure the expected error is thrown when no value is present.
+		let pid = begin_poll();
 		let vote = AccountVote::Standard { option: 2, balance: 10 };
-		assert_noop!(FateriumPolls::vote(Origin::signed(1), 0, vote), Error::<Test>::NoneValue);
+		assert_noop!(
+			FateriumPolls::vote(Origin::signed(1), pid, vote),
+			Error::<Test>::InsufficientFunds
+		);
 	});
 }
 
 #[test]
-fn params_should_work() {
+fn vote_with_balances_should_work() {
 	new_test_ext().execute_with(|| {
-		assert_eq!(FateriumPolls::poll_count(), 0);
-		assert_eq!(Balances::free_balance(0), 0);
-		assert_eq!(Balances::total_issuance(), 0);
+		let _pid = begin_poll();
 	});
 }
 
-#[test]
-fn create_vote_close() {
-	new_test_ext().execute_with(|| {
-		begin_poll();
+// #[test]
+// fn vote_with_balances_should_work() {
+// 	new_test_ext().execute_with(|| {
+// 		let _pid = begin_poll();
+// 	});
+// }
 
-		// TODO: Test this function
+#[test]
+fn vote_cancellation_should_work() {
+	new_test_ext().execute_with(|| {
+		let pid = begin_poll();
+		let v = AccountVote::Standard { option: 1, balance: 10 };
+		assert_ok!(FateriumPolls::vote(Origin::signed(5), pid, v));
+		assert_ok!(FateriumPolls::remove_vote(Origin::signed(5), pid));
+		assert_eq!(tally(pid), Tally::default());
+		// assert_ok!(FateriumPolls::unlock(Origin::signed(5), 5));
+		assert_eq!(Balances::locks(5), vec![]);
 	});
 }
