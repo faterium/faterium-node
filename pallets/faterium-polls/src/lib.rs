@@ -18,18 +18,22 @@ pub use types::*;
 
 use codec::HasCompact;
 use frame_support::{
+	ensure,
 	traits::{schedule::Named as ScheduleNamed, Currency, LockableCurrency, ReservableCurrency},
 	weights::Weight,
 };
 use frame_system::Config as SystemConfig;
 // use pallet_democracy::Config as DemocracyConfig;
-use sp_runtime::traits::{AtLeast32BitUnsigned, Saturating, StaticLookup};
+use sp_runtime::{
+	traits::{AtLeast32BitUnsigned, Saturating, StaticLookup},
+	ArithmeticError, DispatchError, DispatchResult,
+};
 
 type AccountIdLookupOf<T> = <<T as frame_system::Config>::Lookup as StaticLookup>::Source;
 
 #[frame_support::pallet]
 pub mod pallet {
-	use super::*;
+	use super::{DispatchResult, *};
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
@@ -113,7 +117,7 @@ pub mod pallet {
 	/// have recorded. The second item is the total amount of delegations, that will be added.
 	#[pallet::storage]
 	pub type VotingOf<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AccountId, Voting<T::PollIndex, T::Balance>, ValueQuery>;
+		StorageMap<_, Blake2_128Concat, (T::AccountId, T::PollIndex), AccountVote<T::Balance>>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -137,6 +141,8 @@ pub mod pallet {
 		/// The account currently has votes attached to it and the operation cannot succeed until
 		/// these are removed through `remove_vote`.
 		VotesExist,
+		/// Vote given for an invalid poll.
+		PollInvalid,
 	}
 
 	#[pallet::hooks]
@@ -207,15 +213,9 @@ pub mod pallet {
 			vote: AccountVote<T::Balance>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-
-			// TODO: Validate AccountVote param
-			// TODO: Get and check poll by poll_id
-			// TODO: Reserve voter's Currency balance
-
-			// Emit an event.
-			Self::deposit_event(Event::Voted { voter: who, poll_id, vote });
-			// TODO: Remove error.
-			Err(Error::<T>::NoneValue.into())
+			Self::try_vote(&who, poll_id, vote.clone())?;
+			Self::deposit_event(Event::<T>::Voted { voter: who.clone(), poll_id, vote });
+			Ok(())
 		}
 
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
@@ -239,5 +239,58 @@ impl<T: Config> Pallet<T> {
 	fn begin_block(_now: T::BlockNumber) -> Weight {
 		let weight = Weight::zero();
 		weight
+	}
+
+	/// Actually enact a vote, if legit.
+	fn try_vote(
+		who: &T::AccountId,
+		poll_id: T::PollIndex,
+		vote: AccountVote<T::Balance>,
+	) -> DispatchResult {
+		let mut poll = Self::poll_status(poll_id)?;
+		ensure!(
+			vote.capital() <= T::Currency::free_balance(who).into(),
+			Error::<T>::InsufficientFunds
+		);
+		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
+			if let Some(v) = voting {
+				// Shouldn't be possible to fail, but we handle it gracefully.
+				poll.tally.remove(v).ok_or(ArithmeticError::Underflow)?;
+				*v = vote.clone();
+			} else {
+				*voting = Some(vote.clone());
+			}
+			// Shouldn't be possible to fail, but we handle it gracefully.
+			poll.tally.add(&vote).ok_or(ArithmeticError::Overflow)?;
+			Ok(())
+		})?;
+		// Extend the lock to `balance` (rather than setting it) since we don't know what other
+		// votes are in place.
+		// T::Currency::extend_lock(DEMOCRACY_ID, who, vote.balance(), WithdrawReasons::TRANSFER);
+		PollDetailsOf::<T>::insert(poll_id, poll);
+		Ok(())
+	}
+
+	/// Returns Ok if the given poll is active, Err otherwise.
+	fn ensure_ongoing(
+		poll: PollDetails<T::PollIndex, T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
+	) -> Result<
+		PollDetails<T::PollIndex, T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
+		DispatchError,
+	> {
+		match poll.status {
+			PollStatus::Ongoing { .. } => Ok(poll),
+			_ => Err(Error::<T>::PollInvalid.into()),
+		}
+	}
+
+	fn poll_status(
+		poll_id: T::PollIndex,
+	) -> Result<
+		PollDetails<T::PollIndex, T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
+		DispatchError,
+	> {
+		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
+		Self::ensure_ongoing(poll)
 	}
 }

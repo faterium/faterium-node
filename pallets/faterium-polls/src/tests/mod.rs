@@ -19,6 +19,7 @@ use sp_runtime::{
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 type PollIndex = u64;
+type Balance = u64;
 
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
@@ -85,7 +86,7 @@ impl pallet_balances::Config for Test {
 	type MaxReserves = ();
 	type ReserveIdentifier = [u8; 8];
 	type MaxLocks = ConstU32<10>;
-	type Balance = u64;
+	type Balance = Balance;
 	type Event = Event;
 	type DustRemoval = ();
 	type ExistentialDeposit = ConstU64<1>;
@@ -95,7 +96,7 @@ impl pallet_balances::Config for Test {
 
 impl pallet_faterium_polls::Config for Test {
 	type Event = Event;
-	type Balance = u64;
+	type Balance = Balance;
 	type AssetId = u32;
 	type Currency = pallet_balances::Pallet<Self>;
 	type PollIndex = PollIndex;
@@ -121,12 +122,12 @@ fn fast_forward_to(n: u64) {
 	}
 }
 
-fn set_balance_proposal(value: u64) -> Vec<u8> {
+fn set_balance_proposal(value: Balance) -> Vec<u8> {
 	Call::Balances(pallet_balances::Call::set_balance { who: 42, new_free: value, new_reserved: 0 })
 		.encode()
 }
 
-fn propose_set_balance(who: u64, value: u64) -> DispatchResult {
+fn propose_set_balance(who: u64, value: Balance) -> DispatchResult {
 	set_balance_proposal(value);
 	FateriumPolls::create_poll(
 		Origin::signed(who),
@@ -157,6 +158,6 @@ fn params_should_work() {
 	});
 }
 
-fn tally(r: PollIndex) -> Tally<u64> {
-	FateriumPolls::poll_details_of(r).unwrap().tally
+fn tally(pid: PollIndex) -> Tally<Balance> {
+	FateriumPolls::poll_details_of(pid).unwrap().tally
 }
