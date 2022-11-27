@@ -32,11 +32,11 @@ pub struct PollDetails<Balance, AccountId, AssetId, BlockNumber> {
 	pub ipfs_cid: IpfsCid,
 	/// Beneficiaries of this poll, who will get winning deposit.
 	///
-	/// Vector of [Account, Interest], where sum of all percentages never more
-	/// than 100%, or 10_000u32 (e.g. 0.05% == 5; 10% == 1000).
+	/// Vector of [Account, Interest, IsCollected], where sum of all percentages never
+	/// more than 100%, or 10_000u32 (e.g. 0.05% = 5; 10% = 1000).
 	///
 	/// If empty, all stakes can be returned to the voters after the end of the poll.
-	pub beneficiaries: Vec<(AccountId, u32)>,
+	pub beneficiaries: Vec<(AccountId, u32, bool)>,
 	/// Reward settings of the poll.
 	pub reward_settings: RewardSettings,
 	/// The goal or minimum target amount on one option for the poll to happen.
@@ -44,21 +44,21 @@ pub struct PollDetails<Balance, AccountId, AssetId, BlockNumber> {
 	/// The number of poll options.
 	pub options_count: u8,
 	/// Info regrading stake on poll options.
-	pub tally: Tally<Balance>,
+	pub votes: Votes<Balance>,
 	/// Currency of the poll.
 	pub currency: PollCurrency<AssetId>,
 	/// Status of the poll.
 	pub status: PollStatus<BlockNumber>,
 }
 
-impl<Balance: AtLeast32BitUnsigned, AccountId, AssetId, BlockNumber>
+impl<Balance: AtLeast32BitUnsigned + Copy, AccountId, AssetId, BlockNumber>
 	PollDetails<Balance, AccountId, AssetId, BlockNumber>
 {
 	/// Creates a new PollDetails with Ongoing status and empty Tally.
 	pub fn new(
 		created_by: AccountId,
 		ipfs_cid: IpfsCid,
-		beneficiaries: Vec<(AccountId, u32)>,
+		beneficiaries: Vec<(AccountId, u32, bool)>,
 		reward_settings: RewardSettings,
 		goal: Balance,
 		options_count: u8,
@@ -73,7 +73,7 @@ impl<Balance: AtLeast32BitUnsigned, AccountId, AssetId, BlockNumber>
 			reward_settings,
 			goal,
 			options_count,
-			tally: Tally::new(options_count),
+			votes: Votes::new(options_count),
 			currency,
 			status: PollStatus::Ongoing { start, end },
 		}
@@ -107,59 +107,58 @@ pub enum PollStatus<BlockNumber> {
 	},
 }
 
-/// A vote for a poll of a particular account.
-#[derive(Encode, Decode, Clone, Eq, PartialEq, RuntimeDebug, TypeInfo)]
-pub struct AccountVote<Balance>(pub Vec<(u8, Balance)>);
-
-impl<Balance: AtLeast32BitUnsigned> AccountVote<Balance> {
-	pub fn capital(&self) -> Balance {
-		self.0
-			.iter()
-			.map(|x| x.1.clone())
-			.fold(Balance::zero(), |a, b| a.saturating_add(b))
+impl<BlockNumber> PollStatus<BlockNumber> {
+	pub fn is_ongoing(&self) -> bool {
+		match self {
+			PollStatus::Ongoing { .. } => true,
+			_ => false,
+		}
 	}
 }
 
-/// Info regarding an ongoing poll.
-#[derive(Encode, Decode, Default, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-pub struct Tally<Balance> {
-	/// The sum of all options' stake.
-	pub sum: Balance,
-	/// The vector of options' stake.
-	pub options_votes: Vec<Balance>,
+/// A vote for a poll of a particular account.
+#[derive(Encode, Decode, Clone, Eq, PartialEq, RuntimeDebug, TypeInfo)]
+pub struct AccountVotes<Balance> {
+	pub votes: Votes<Balance>,
+	pub collected: bool,
 }
 
-impl<Balance: AtLeast32BitUnsigned> Tally<Balance> {
+/// A vote for a poll.
+#[derive(Encode, Decode, Clone, Eq, PartialEq, RuntimeDebug, TypeInfo)]
+pub struct Votes<Balance>(pub Vec<Balance>);
+
+impl<Balance: AtLeast32BitUnsigned + Copy> Votes<Balance> {
 	pub fn new(options_count: u8) -> Self {
-		Self {
-			sum: Balance::zero(),
-			options_votes: (0..options_count).map(|_| Balance::zero()).collect(),
-		}
+		Self((0..options_count).map(|_| Balance::zero()).collect())
+	}
+
+	pub fn validate(&self, options_count: u8) -> bool {
+		self.0.len() == options_count as usize
+	}
+
+	pub fn capital(&self) -> Balance {
+		self.0.iter().fold(Balance::zero(), |a, b| a.saturating_add(*b))
 	}
 
 	/// Add an account's vote into the tally. Returns None if invalid option or overflow.
-	pub fn add(&mut self, vote: &AccountVote<Balance>) -> Option<usize> {
-		self.sum = self.sum.checked_add(&vote.capital())?;
-		for v in &vote.0 {
-			if let Some(cap) = self.options_votes.get_mut(v.0 as usize) {
-				*cap = cap.checked_add(&v.1)?;
-			} else {
-				return None
-			}
+	pub fn add(&mut self, votes: &Votes<Balance>) -> Option<()> {
+		if votes.0.len() != self.0.len() {
+			return None
 		}
-		Some(vote.0.len())
+		for (i, b) in votes.0.iter().enumerate() {
+			self.0[i] = self.0[i].checked_add(&b)?;
+		}
+		Some(())
 	}
 
 	/// Remove an account's vote from the tally. Returns None if invalid option or overflow.
-	pub fn remove(&mut self, vote: &AccountVote<Balance>) -> Option<usize> {
-		self.sum = self.sum.checked_add(&vote.capital())?;
-		for v in &vote.0 {
-			if let Some(cap) = self.options_votes.get_mut(v.0 as usize) {
-				cap.checked_sub(&v.1)?;
-			} else {
-				return None
-			}
+	pub fn remove(&mut self, votes: &Votes<Balance>) -> Option<()> {
+		if votes.0.len() != self.0.len() {
+			return None
 		}
-		Some(vote.0.len())
+		for (i, b) in votes.0.iter().enumerate() {
+			self.0[i] = self.0[i].checked_sub(&b)?;
+		}
+		Some(())
 	}
 }

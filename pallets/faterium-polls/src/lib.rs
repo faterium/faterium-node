@@ -96,6 +96,10 @@ pub mod pallet {
 		/// The polls' pallet id, used for deriving its sovereign account ID.
 		#[pallet::constant]
 		type PalletId: Get<PalletId>;
+
+		/// Maximum amount of funds that should be placed in a deposit for making a proposal.
+		#[pallet::constant]
+		type MaxPollBeneficiaries: Get<u32>;
 	}
 
 	/// The number of polls that have been made so far.
@@ -117,7 +121,7 @@ pub mod pallet {
 	/// have recorded. The second item is the total amount of delegations, that will be added.
 	#[pallet::storage]
 	pub type VotingOf<T: Config> =
-		StorageMap<_, Blake2_128Concat, (T::AccountId, T::PollIndex), AccountVote<T::Balance>>;
+		StorageMap<_, Blake2_128Concat, (T::AccountId, T::PollIndex), AccountVotes<T::Balance>>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -127,7 +131,7 @@ pub mod pallet {
 		/// A poll has been cancelled.
 		Cancelled { poll_id: T::PollIndex },
 		/// An account has voted in a poll.
-		Voted { voter: T::AccountId, poll_id: T::PollIndex, vote: AccountVote<T::Balance> },
+		Voted { voter: T::AccountId, poll_id: T::PollIndex, votes: Votes<T::Balance> },
 		/// An account has voted in a poll.
 		VoteRemoved { voter: T::AccountId, poll_id: T::PollIndex },
 	}
@@ -145,6 +149,10 @@ pub mod pallet {
 		InvalidPollDetails,
 		/// Vote given for an invalid poll.
 		PollInvalid,
+		/// Invalid number of votes given for a poll.
+		InvalidPollVotes,
+		/// Can't collect from Ongoing Poll.
+		CollectOnOngoingPoll,
 	}
 
 	#[pallet::hooks]
@@ -174,7 +182,7 @@ pub mod pallet {
 			let mut benfs = vec![];
 			for b in beneficiaries {
 				let account = T::Lookup::lookup(b.0)?;
-				benfs.push((account, b.1));
+				benfs.push((account, b.1, false));
 			}
 			// Create poll details struct.
 			let poll = PollDetails::new(
@@ -222,13 +230,15 @@ pub mod pallet {
 		pub fn vote(
 			origin: OriginFor<T>,
 			#[pallet::compact] poll_id: T::PollIndex,
-			vote: AccountVote<T::Balance>,
+			// TODO: Perhaps it's better to receive a vec of tuples with index mapping,
+			// and then convert it to Votes struct. Instead of receiving zeros.
+			votes: Votes<T::Balance>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// Call inner function.
-			Self::try_vote(&who, poll_id, vote.clone())?;
+			Self::try_vote(&who, poll_id, votes.clone())?;
 			// Emit an event.
-			Self::deposit_event(Event::<T>::Voted { voter: who.clone(), poll_id, vote });
+			Self::deposit_event(Event::<T>::Voted { voter: who.clone(), poll_id, votes });
 			Ok(())
 		}
 
@@ -244,6 +254,74 @@ pub mod pallet {
 
 			// Emit an event.
 			Self::deposit_event(Event::VoteRemoved { voter: who, poll_id });
+			Ok(())
+		}
+
+		/// TODO: Write comment
+		/// Check if account is: in benefitiaries / or is a voter (won or lost) / already
+		/// - Beneficiary=true, Interest=1% of winning poll option amount
+		/// - Voter=true, Interest=99% of his Vote amount
+		/// Check if he is the voter
+		/// - Check benefitiaries interest
+		/// - If benefitiaries sum is 100% - voters should return with Err
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
+		pub fn collect(
+			origin: OriginFor<T>,
+			#[pallet::compact] poll_id: T::PollIndex,
+		) -> DispatchResult {
+			let _who = ensure_signed(origin)?;
+
+			let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
+			if poll.status.is_ongoing() {
+				return Err(Error::<T>::CollectOnOngoingPoll.into())
+			}
+
+			// let beneficiary: Option<(AccountId, u32, bool)> = poll.beneficiaries.find(who);
+			// let voter: Option<AccountVotes> = AccountVotes::get();
+			// if beneficiary.is_none() && voter.is_none() {
+			// 	return Error // Account isn't a Voter or a Beneficiary;
+			// }
+
+			// let winning_option: u8 = poll.winning_option;
+			// let beneficiaries_sum: u32 = poll.beneficiaries.sum();
+			// let beneficiary_interest_amount: Balance = Default;
+			// let voter_return_amount: Balance = Default;
+
+			// if let Some(beneficiary) = beneficiary {
+			// 	if !beneficiary.collected {
+			// 		let win_opt_amount = poll.tally.options_votes[winning_option];
+			// 		beneficiary_interest_amount = win_opt_amount * 30 % (beneficiary.interest);
+			// 	}
+			// }
+			// if let Some(voter) = voter {
+			// 	if !voter.collected {
+			// 		for opt in voter.options {
+			// 			if opt.0 == winning_option {
+			// 				voter_return_amount += opt.1 - 30 % (beneficiaries_sum);
+			// 			} else {
+			// 				voter_return_amount += opt.1;
+			// 			}
+			// 		}
+			// 	}
+			// }
+			// if beneficiary_interest_amount.is_zero() && voter_return_amount.is_zero() {
+			// 	return Error // Nothing to collect or already collected
+			// }
+
+			// let sum: Balance = Default;
+			// if beneficiary_interest_amount > 0 {
+			// 	update_collected_beneficiary_in_poll_details();
+			// 	sum += beneficiary_interest_amount;
+			// }
+			// if voter_return_amount > 0 {
+			// 	update_collected_account_vote();
+			// 	sum += voter_return_amount;
+			// }
+			// // No need in if
+			// send_money(account, currency, sum);
+
+			// Emit an event.
+			// Self::deposit_event(Event::Collected { voter: who, poll_id });
 			Ok(())
 		}
 	}
@@ -276,25 +354,25 @@ impl<T: Config> Pallet<T> {
 	fn try_vote(
 		who: &T::AccountId,
 		poll_id: T::PollIndex,
-		vote: AccountVote<T::Balance>,
+		votes: Votes<T::Balance>,
 	) -> DispatchResult {
 		let mut poll = Self::poll_status(poll_id)?;
+		ensure!(votes.validate(poll.options_count), Error::<T>::InvalidPollVotes);
 		ensure!(
-			vote.capital() <= T::Currency::free_balance(who).into(),
+			votes.capital() <= T::Currency::free_balance(who).into(),
 			Error::<T>::InsufficientFunds
 		);
 		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
 			if let Some(v) = voting {
-				// Shouldn't be possible to fail, but we handle it gracefully.
-				poll.tally.remove(v).ok_or(ArithmeticError::Underflow)?;
-				*v = vote.clone();
+				v.votes.add(&votes);
 			} else {
-				*voting = Some(vote.clone());
+				*voting = Some(AccountVotes { votes: votes.clone(), collected: false });
 			}
 			// Shouldn't be possible to fail, but we handle it gracefully.
-			poll.tally.add(&vote).ok_or(ArithmeticError::Overflow)?;
+			poll.votes.add(&votes).ok_or(ArithmeticError::Overflow)?;
 			Ok(())
 		})?;
+		// TODO: Transfer or lock.
 		// Extend the lock to `balance` (rather than setting it) since we don't know what other
 		// votes are in place.
 		// T::Currency::extend_lock(DEMOCRACY_ID, who, vote.balance(), WithdrawReasons::TRANSFER);
@@ -302,20 +380,14 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	/// Returns Ok if the given poll is active, Err otherwise.
-	fn ensure_ongoing(
-		poll: PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
-	) -> Result<PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>, DispatchError> {
-		match poll.status {
-			PollStatus::Ongoing { .. } => Ok(poll),
-			_ => Err(Error::<T>::PollInvalid.into()),
-		}
-	}
-
+	/// Returns Ok(PollDetails) if the given poll.status is Ongoing, Err otherwise.
 	fn poll_status(
 		poll_id: T::PollIndex,
 	) -> Result<PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>, DispatchError> {
 		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
-		Self::ensure_ongoing(poll)
+		match poll.status.is_ongoing() {
+			true => Ok(poll),
+			_ => Err(Error::<T>::PollInvalid.into()),
+		}
 	}
 }

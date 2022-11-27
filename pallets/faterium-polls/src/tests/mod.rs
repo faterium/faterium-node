@@ -103,6 +103,7 @@ impl pallet_faterium_polls::Config for Test {
 	type Scheduler = Scheduler;
 	type PalletsOrigin = OriginCaller;
 	type PalletId = FateriumPollsPalletId;
+	type MaxPollBeneficiaries = ConstU32<10>;
 }
 
 // Build genesis storage according to the mock runtime.
@@ -159,6 +160,6 @@ fn params_should_work() {
 	});
 }
 
-fn tally(pid: PollIndex) -> Tally<Balance> {
-	FateriumPolls::poll_details_of(pid).unwrap().tally
+fn votes(pid: PollIndex) -> Votes<Balance> {
+	FateriumPolls::poll_details_of(pid).unwrap().votes
 }
