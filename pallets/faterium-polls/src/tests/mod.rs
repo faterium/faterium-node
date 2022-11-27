@@ -3,7 +3,6 @@
 mod voting;
 
 use crate::{self as pallet_faterium_polls, *};
-use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok, parameter_types,
 	traits::{ConstU16, ConstU32, ConstU64, EqualPrivilegeOnly, Hooks},
@@ -66,6 +65,7 @@ parameter_types! {
 	pub BlockWeights: frame_system::limits::BlockWeights =
 		frame_system::limits::BlockWeights::simple_max(Weight::from_ref_time(1_000_000));
 	pub MaximumSchedulerWeight: Weight = Perbill::from_percent(80) * BlockWeights::get().max_block;
+	pub const FateriumPollsPalletId: PalletId = PalletId(*b"py/ftmpl");
 }
 
 impl pallet_scheduler::Config for Test {
@@ -102,6 +102,7 @@ impl pallet_faterium_polls::Config for Test {
 	type PollIndex = PollIndex;
 	type Scheduler = Scheduler;
 	type PalletsOrigin = OriginCaller;
+	type PalletId = FateriumPollsPalletId;
 }
 
 // Build genesis storage according to the mock runtime.
@@ -122,21 +123,15 @@ fn fast_forward_to(n: u64) {
 	}
 }
 
-fn set_balance_proposal(value: Balance) -> Vec<u8> {
-	Call::Balances(pallet_balances::Call::set_balance { who: 42, new_free: value, new_reserved: 0 })
-		.encode()
-}
-
-fn propose_set_balance(who: u64, value: Balance) -> DispatchResult {
-	set_balance_proposal(value);
+fn create_poll(who: u64, goal: Balance) -> DispatchResult {
 	FateriumPolls::create_poll(
 		Origin::signed(who),
 		vec![],
-		3,
-		PollCurrency::Native,
 		vec![],
 		RewardSettings::None,
-		100,
+		goal,
+		3,
+		PollCurrency::Native,
 		10,
 		20,
 	)
@@ -144,9 +139,15 @@ fn propose_set_balance(who: u64, value: Balance) -> DispatchResult {
 
 fn begin_poll() -> PollIndex {
 	System::set_block_number(0);
-	assert_ok!(propose_set_balance(1, 2));
+	assert_ok!(create_poll(1, 100));
 	fast_forward_to(2);
 	0
+}
+
+fn begin_poll_with_balances(acc: u64) -> PollIndex {
+	assert_ok!(Balances::set_balance(Origin::root(), acc, 20, 0));
+	assert_eq!(Balances::free_balance(acc), 20);
+	begin_poll()
 }
 
 #[test]

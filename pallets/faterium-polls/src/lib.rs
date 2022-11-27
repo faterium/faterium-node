@@ -19,13 +19,15 @@ pub use types::*;
 use codec::HasCompact;
 use frame_support::{
 	ensure,
-	traits::{schedule::Named as ScheduleNamed, Currency, LockableCurrency, ReservableCurrency},
+	traits::{
+		schedule::Named as ScheduleNamed, Currency, Get, LockableCurrency, ReservableCurrency,
+	},
 	weights::Weight,
+	PalletId,
 };
 use frame_system::Config as SystemConfig;
-// use pallet_democracy::Config as DemocracyConfig;
 use sp_runtime::{
-	traits::{AtLeast32BitUnsigned, Saturating, StaticLookup},
+	traits::{AccountIdConversion, AtLeast32BitUnsigned, Saturating, StaticLookup},
 	ArithmeticError, DispatchError, DispatchResult,
 };
 
@@ -90,6 +92,10 @@ pub mod pallet {
 
 		/// Overarching type of all pallets origins.
 		type PalletsOrigin: From<frame_system::RawOrigin<Self::AccountId>>;
+
+		/// The polls' pallet id, used for deriving its sovereign account ID.
+		#[pallet::constant]
+		type PalletId: Get<PalletId>;
 	}
 
 	/// The number of polls that have been made so far.
@@ -97,20 +103,14 @@ pub mod pallet {
 	#[pallet::getter(fn poll_count)]
 	pub type PollCount<T: Config> = StorageValue<_, T::PollIndex, ValueQuery>;
 
-	/// Details of a poll.
+	/// Details of polls.
 	#[pallet::storage]
 	#[pallet::getter(fn poll_details_of)]
 	pub(super) type PollDetailsOf<T: Config> = StorageMap<
 		_,
 		Blake2_128Concat,
 		T::PollIndex,
-		PollDetails<
-			T::PollIndex,
-			T::Balance,
-			T::AccountId,
-			T::AssetId,
-			<T as frame_system::Config>::BlockNumber,
-		>,
+		PollDetails<T::Balance, T::AccountId, T::AssetId, <T as frame_system::Config>::BlockNumber>,
 	>;
 
 	/// All votes for a particular voter. We store the balance for the number of votes that we
@@ -141,6 +141,8 @@ pub mod pallet {
 		/// The account currently has votes attached to it and the operation cannot succeed until
 		/// these are removed through `remove_vote`.
 		VotesExist,
+		/// Invalid poll details given.
+		InvalidPollDetails,
 		/// Vote given for an invalid poll.
 		PollInvalid,
 	}
@@ -158,33 +160,43 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn create_poll(
 			origin: OriginFor<T>,
-			_ipfs_cid: IpfsCid,
-			_options_count: u8,
-			_currency: PollCurrency<T::AssetId>,
-			_beneficiaries: Vec<(AccountIdLookupOf<T>, u32)>,
-			_reward_settings: RewardSettings,
-			_goal: T::Balance,
-			_poll_start: <T as frame_system::Config>::BlockNumber,
-			_poll_end: <T as frame_system::Config>::BlockNumber,
+			ipfs_cid: IpfsCid,
+			beneficiaries: Vec<(AccountIdLookupOf<T>, u32)>,
+			reward_settings: RewardSettings,
+			goal: T::Balance,
+			options_count: u8,
+			currency: PollCurrency<T::AssetId>,
+			start: <T as frame_system::Config>::BlockNumber,
+			end: <T as frame_system::Config>::BlockNumber,
 		) -> DispatchResult {
-			// Check that the extrinsic was signed and get the signer.
 			let who = ensure_signed(origin)?;
-
-			// TODO: Check and validate params
-
-			// Update storage.
+			// Lookup for accounts of beneficiaries.
+			let mut benfs = vec![];
+			for b in beneficiaries {
+				let account = T::Lookup::lookup(b.0)?;
+				benfs.push((account, b.1));
+			}
+			// Create poll details struct.
+			let poll = PollDetails::new(
+				who.clone(),
+				ipfs_cid,
+				benfs,
+				reward_settings,
+				goal,
+				options_count,
+				currency,
+				start,
+				end,
+			);
+			// Validate poll details.
+			ensure!(poll.validate(), Error::<T>::InvalidPollDetails);
+			// Get next poll_id from storage.
 			let poll_id = <PollCount<T>>::get();
-
-			// TODO: Create Poll struct
-			// TODO: Save Poll to the storage
-
-			// TODO: Update storage and save a new poll
-
+			<PollDetailsOf<T>>::insert(poll_id, poll);
 			// Updates poll count.
 			let mut next_id = poll_id;
 			next_id.saturating_inc();
 			<PollCount<T>>::put(next_id);
-
 			// Emit an event.
 			Self::deposit_event(Event::Created { poll_id, creator: who });
 			Ok(())
@@ -213,7 +225,9 @@ pub mod pallet {
 			vote: AccountVote<T::Balance>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			// Call inner function.
 			Self::try_vote(&who, poll_id, vote.clone())?;
+			// Emit an event.
 			Self::deposit_event(Event::<T>::Voted { voter: who.clone(), poll_id, vote });
 			Ok(())
 		}
@@ -236,6 +250,23 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
+	/// The account ID of the treasury pot.
+	///
+	/// This actually does computation. If you need to keep using it, then make sure you cache the
+	/// value and only call this once.
+	pub fn account_id() -> T::AccountId {
+		T::PalletId::get().into_account_truncating()
+	}
+
+	/// Return the amount of money in the pot.
+	// The existential deposit is not part of the pot so account never gets deleted.
+	pub fn pot() -> T::Balance {
+		T::Currency::free_balance(&Self::account_id())
+			// Must never be less than 0 but better be safe.
+			.saturating_sub(T::Currency::minimum_balance())
+			.into()
+	}
+
 	fn begin_block(_now: T::BlockNumber) -> Weight {
 		let weight = Weight::zero();
 		weight
@@ -273,11 +304,8 @@ impl<T: Config> Pallet<T> {
 
 	/// Returns Ok if the given poll is active, Err otherwise.
 	fn ensure_ongoing(
-		poll: PollDetails<T::PollIndex, T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
-	) -> Result<
-		PollDetails<T::PollIndex, T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
-		DispatchError,
-	> {
+		poll: PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
+	) -> Result<PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>, DispatchError> {
 		match poll.status {
 			PollStatus::Ongoing { .. } => Ok(poll),
 			_ => Err(Error::<T>::PollInvalid.into()),
@@ -286,10 +314,7 @@ impl<T: Config> Pallet<T> {
 
 	fn poll_status(
 		poll_id: T::PollIndex,
-	) -> Result<
-		PollDetails<T::PollIndex, T::Balance, T::AccountId, T::AssetId, T::BlockNumber>,
-		DispatchError,
-	> {
+	) -> Result<PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>, DispatchError> {
 		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
 		Self::ensure_ongoing(poll)
 	}
