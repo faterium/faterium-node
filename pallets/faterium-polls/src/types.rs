@@ -33,10 +33,10 @@ pub struct PollDetails<Balance, AccountId, AssetId, BlockNumber> {
 	/// Beneficiaries of this poll, who will get winning deposit.
 	///
 	/// Vector of [Account, Interest, IsCollected], where sum of all percentages never
-	/// more than 100%, or 10_000u32 (e.g. 0.05% = 5; 10% = 1000).
+	/// more than 100%, or 10_000u32 (e.g. 5 = 0.05%; 1000 = 10%).
 	///
 	/// If empty, all stakes can be returned to the voters after the end of the poll.
-	pub beneficiaries: Vec<(AccountId, u32, bool)>,
+	pub beneficiaries: Vec<Beneficiary<AccountId>>,
 	/// Reward settings of the poll.
 	pub reward_settings: RewardSettings,
 	/// The goal or minimum target amount on one option for the poll to happen.
@@ -51,14 +51,14 @@ pub struct PollDetails<Balance, AccountId, AssetId, BlockNumber> {
 	pub status: PollStatus<BlockNumber>,
 }
 
-impl<Balance: AtLeast32BitUnsigned + Copy, AccountId, AssetId, BlockNumber>
+impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, BlockNumber>
 	PollDetails<Balance, AccountId, AssetId, BlockNumber>
 {
 	/// Creates a new PollDetails with Ongoing status and empty Tally.
 	pub fn new(
 		created_by: AccountId,
 		ipfs_cid: IpfsCid,
-		beneficiaries: Vec<(AccountId, u32, bool)>,
+		beneficiaries: Vec<Beneficiary<AccountId>>,
 		reward_settings: RewardSettings,
 		goal: Balance,
 		options_count: u8,
@@ -84,10 +84,43 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId, AssetId, BlockNumber>
 		// TODO: Validate struct
 		true
 	}
+
+	/// Returns true if struct valid, false otherwise.
+	pub fn find_beneficiary(&self, account: &AccountId) -> Option<Beneficiary<AccountId>> {
+		self.beneficiaries.iter().find(|&x| x.who.eq(account)).cloned()
+	}
+
+	pub fn beneficiary_sum(&self) -> u32 {
+		self.beneficiaries.iter().fold(0u32, |a, b| a.saturating_add(b.interest))
+	}
+
+	pub fn winning_option(&self) -> Option<u8> {
+		match self.status {
+			PollStatus::Finished { winning_option, .. } => Some(winning_option),
+			_ => None,
+		}
+	}
+}
+
+#[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo)]
+pub struct Beneficiary<AccountId> {
+	/// AccountId of the beneficiary.
+	pub who: AccountId,
+	/// Beneficiary interest, can't be more than 10_000u32.
+	/// Can be converted to percentage (e.g. 5 = 0.05%; 1000 = 10%).
+	pub interest: u32,
+	/// Is beneficiary collected winning option from the poll.
+	pub collected: bool,
+}
+
+impl<AccountId> Beneficiary<AccountId> {
+	pub fn new(who: AccountId, interest: u32) -> Self {
+		Self { who, interest, collected: false }
+	}
 }
 
 /// Status of a poll, present, cancelled, or past.
-#[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo)]
+#[derive(Clone, Copy, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo)]
 pub enum PollStatus<BlockNumber> {
 	/// Poll is happening, the args are the block number at which it will start and end.
 	Ongoing {

@@ -27,7 +27,9 @@ use frame_support::{
 };
 use frame_system::Config as SystemConfig;
 use sp_runtime::{
-	traits::{AccountIdConversion, AtLeast32BitUnsigned, Saturating, StaticLookup},
+	traits::{
+		AccountIdConversion, AtLeast32BitUnsigned, CheckedDiv, Saturating, StaticLookup, Zero,
+	},
 	ArithmeticError, DispatchError, DispatchResult,
 };
 
@@ -117,9 +119,9 @@ pub mod pallet {
 		PollDetails<T::Balance, T::AccountId, T::AssetId, <T as frame_system::Config>::BlockNumber>,
 	>;
 
-	/// All votes for a particular voter. We store the balance for the number of votes that we
-	/// have recorded. The second item is the total amount of delegations, that will be added.
+	/// All votes for a particular voter.
 	#[pallet::storage]
+	#[pallet::getter(fn voting_of)]
 	pub type VotingOf<T: Config> =
 		StorageMap<_, Blake2_128Concat, (T::AccountId, T::PollIndex), AccountVotes<T::Balance>>;
 
@@ -134,6 +136,8 @@ pub mod pallet {
 		Voted { voter: T::AccountId, poll_id: T::PollIndex, votes: Votes<T::Balance> },
 		/// An account has voted in a poll.
 		VoteRemoved { voter: T::AccountId, poll_id: T::PollIndex },
+		/// Voter/beneficiary collected his vote/interest.
+		Collected { who: T::AccountId, poll_id: T::PollIndex, amount: T::Balance },
 	}
 
 	#[pallet::error]
@@ -153,6 +157,10 @@ pub mod pallet {
 		InvalidPollVotes,
 		/// Can't collect from Ongoing Poll.
 		CollectOnOngoingPoll,
+		/// Account is neither a voter nor a beneficiary.
+		AccountNotVoterOrBeneficiary,
+		/// Nothing to collect or already collected
+		NothingToCollect,
 	}
 
 	#[pallet::hooks]
@@ -182,7 +190,7 @@ pub mod pallet {
 			let mut benfs = vec![];
 			for b in beneficiaries {
 				let account = T::Lookup::lookup(b.0)?;
-				benfs.push((account, b.1, false));
+				benfs.push(Beneficiary::new(account, b.1));
 			}
 			// Create poll details struct.
 			let poll = PollDetails::new(
@@ -199,12 +207,12 @@ pub mod pallet {
 			// Validate poll details.
 			ensure!(poll.validate(), Error::<T>::InvalidPollDetails);
 			// Get next poll_id from storage.
-			let poll_id = <PollCount<T>>::get();
-			<PollDetailsOf<T>>::insert(poll_id, poll);
+			let poll_id = PollCount::<T>::get();
+			PollDetailsOf::<T>::insert(poll_id, poll);
 			// Updates poll count.
 			let mut next_id = poll_id;
 			next_id.saturating_inc();
-			<PollCount<T>>::put(next_id);
+			PollCount::<T>::put(next_id);
 			// Emit an event.
 			Self::deposit_event(Event::Created { poll_id, creator: who });
 			Ok(())
@@ -230,8 +238,8 @@ pub mod pallet {
 		pub fn vote(
 			origin: OriginFor<T>,
 			#[pallet::compact] poll_id: T::PollIndex,
-			// TODO: Perhaps it's better to receive a vec of tuples with index mapping,
-			// and then convert it to Votes struct. Instead of receiving zeros.
+			// TODO: Perhaps it's better to receive a vec of Balances with poll_option index
+			// mapping, and then convert it to Votes struct. Instead of receiving zeros.
 			votes: Votes<T::Balance>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
@@ -269,59 +277,70 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			#[pallet::compact] poll_id: T::PollIndex,
 		) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
-
+			let who = ensure_signed(origin)?;
+			// Get poll and check is it finished or cancelled.
 			let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
 			if poll.status.is_ongoing() {
 				return Err(Error::<T>::CollectOnOngoingPoll.into())
 			}
-
-			// let beneficiary: Option<(AccountId, u32, bool)> = poll.beneficiaries.find(who);
-			// let voter: Option<AccountVotes> = AccountVotes::get();
-			// if beneficiary.is_none() && voter.is_none() {
-			// 	return Error // Account isn't a Voter or a Beneficiary;
-			// }
-
-			// let winning_option: u8 = poll.winning_option;
-			// let beneficiaries_sum: u32 = poll.beneficiaries.sum();
-			// let beneficiary_interest_amount: Balance = Default;
-			// let voter_return_amount: Balance = Default;
-
-			// if let Some(beneficiary) = beneficiary {
-			// 	if !beneficiary.collected {
-			// 		let win_opt_amount = poll.tally.options_votes[winning_option];
-			// 		beneficiary_interest_amount = win_opt_amount * 30 % (beneficiary.interest);
-			// 	}
-			// }
-			// if let Some(voter) = voter {
-			// 	if !voter.collected {
-			// 		for opt in voter.options {
-			// 			if opt.0 == winning_option {
-			// 				voter_return_amount += opt.1 - 30 % (beneficiaries_sum);
-			// 			} else {
-			// 				voter_return_amount += opt.1;
-			// 			}
-			// 		}
-			// 	}
-			// }
-			// if beneficiary_interest_amount.is_zero() && voter_return_amount.is_zero() {
-			// 	return Error // Nothing to collect or already collected
-			// }
-
-			// let sum: Balance = Default;
-			// if beneficiary_interest_amount > 0 {
-			// 	update_collected_beneficiary_in_poll_details();
-			// 	sum += beneficiary_interest_amount;
-			// }
-			// if voter_return_amount > 0 {
-			// 	update_collected_account_vote();
-			// 	sum += voter_return_amount;
-			// }
-			// // No need in if
-			// send_money(account, currency, sum);
-
+			// Find out if origin is a beneficiary or voter.
+			let bnf = poll.find_beneficiary(&who);
+			let voter = VotingOf::<T>::get((&who, poll_id));
+			if bnf.is_none() && voter.is_none() {
+				return Err(Error::<T>::AccountNotVoterOrBeneficiary.into())
+			}
+			// Init needed variables.
+			let win_opt = poll.winning_option();
+			let interest_sum = poll.beneficiary_sum();
+			let mut bnf_interest_amount = T::Balance::zero();
+			let mut voter_return_amount = T::Balance::zero();
+			// Check if win_opt is available.
+			if let Some(win_option) = win_opt {
+				// Check if origin is a beneficiary.
+				if let Some(bnf) = bnf {
+					// Check if origin has funds to collect.
+					if !bnf.collected {
+						bnf_interest_amount = poll.votes.0[win_option as usize]
+							.saturating_mul(bnf.interest.into())
+							.checked_div(&(100u32 * 100u32).into())
+							.ok_or_else(|| ArithmeticError::Underflow)?;
+					}
+				}
+			}
+			// Check if origin is a voter.
+			if let Some(voter) = voter {
+				// Check if origin has funds to collect.
+				if !voter.collected {
+					// TODO: Add rewards collect logic here.
+					for (i, bal) in voter.votes.0.iter().enumerate() {
+						if win_opt.is_some() && i == win_opt.unwrap() as usize {
+							let amount = bal
+								.saturating_mul(interest_sum.into())
+								.checked_div(&(100u32 * 100u32).into())
+								.ok_or_else(|| ArithmeticError::Underflow)?;
+							voter_return_amount = voter_return_amount.saturating_add(amount);
+						} else {
+							voter_return_amount = voter_return_amount.saturating_add(*bal);
+						}
+					}
+				}
+			}
+			// Check is there anything that origin can collect.
+			if bnf_interest_amount.is_zero() && voter_return_amount.is_zero() {
+				return Err(Error::<T>::NothingToCollect.into())
+			}
+			let mut amount = T::Balance::zero();
+			if bnf_interest_amount > Zero::zero() {
+				// TODO: update_collected_beneficiary_in_poll_details();
+				amount = amount.saturating_add(bnf_interest_amount);
+			}
+			if voter_return_amount > Zero::zero() {
+				// TODO: update_collected_account_vote();
+				amount = amount.saturating_add(voter_return_amount);
+			}
+			// TODO: send_money(account, currency, amount);
 			// Emit an event.
-			// Self::deposit_event(Event::Collected { voter: who, poll_id });
+			Self::deposit_event(Event::Collected { who, poll_id, amount });
 			Ok(())
 		}
 	}
@@ -380,7 +399,7 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	/// Returns Ok(PollDetails) if the given poll.status is Ongoing, Err otherwise.
+	/// Returns Ok(PollDetails) if the given poll.status is Ongoing, Error::PollInvalid otherwise.
 	fn poll_status(
 		poll_id: T::PollIndex,
 	) -> Result<PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>, DispatchError> {
