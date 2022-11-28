@@ -6,7 +6,7 @@ use super::*;
 fn overvoting_should_fail() {
 	new_test_ext().execute_with(|| {
 		let pid = begin_poll();
-		let v = Votes(vec![0, 10u64, 0]);
+		let v = Votes(vec![0, 10, 0]);
 		assert_noop!(
 			FateriumPolls::vote(Origin::signed(1), pid, v),
 			Error::<Test>::InsufficientFunds
@@ -24,12 +24,12 @@ fn overvoting_should_fail() {
 #[test]
 fn vote_with_balances_should_work() {
 	new_test_ext().execute_with(|| {
-		assert_eq!(Balances::free_balance(11), 0);
 		let pid = begin_poll_with_balances(5);
-		let v = Votes(vec![0, 10u64, 0]);
+		let v = Votes(vec![0, 10, 0]);
 		assert_ok!(FateriumPolls::vote(Origin::signed(5), pid, v));
-		assert_ok!(FateriumPolls::remove_vote(Origin::signed(5), pid));
+		assert_eq!(Balances::free_balance(5), 10);
 		assert_eq!(votes(pid), Votes(vec![0, 10, 0]));
+		// assert_ok!(FateriumPolls::remove_vote(Origin::signed(5), pid));
 		// assert_ok!(FateriumPolls::unlock(Origin::signed(5), 5));
 		assert_eq!(Balances::locks(5), vec![]);
 	});

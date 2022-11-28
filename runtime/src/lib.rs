@@ -36,7 +36,7 @@ pub use frame_support::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
 	},
-	StorageValue,
+	PalletId, StorageValue,
 };
 pub use frame_system::{Call as SystemCall, EnsureRoot};
 pub use pallet_balances::Call as BalancesCall;
@@ -315,9 +315,20 @@ impl pallet_scheduler::Config for Runtime {
 	type NoPreimagePostponement = NoPreimagePostponement;
 }
 
+parameter_types! {
+	pub const FateriumPollsPalletId: PalletId = PalletId(*b"py/ftmpl");
+}
+
 /// Configure the pallet-faterium-polls in pallets/faterium-polls.
 impl pallet_faterium_polls::Config for Runtime {
 	type Event = Event;
+	type Fungibles = Assets;
+	type Currency = Balances;
+	type PollIndex = u64;
+	type Scheduler = Scheduler;
+	type PalletsOrigin = OriginCaller;
+	type PalletId = FateriumPollsPalletId;
+	type MaxPollBeneficiaries = ConstU32<10>;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

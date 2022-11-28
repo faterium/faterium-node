@@ -29,6 +29,7 @@ frame_support::construct_runtime!(
 	{
 		System: frame_system,
 		Balances: pallet_balances,
+		Assets: pallet_assets,
 		Scheduler: pallet_scheduler,
 		FateriumPolls: pallet_faterium_polls,
 	}
@@ -94,11 +95,37 @@ impl pallet_balances::Config for Test {
 	type WeightInfo = ();
 }
 
-impl pallet_faterium_polls::Config for Test {
+parameter_types! {
+	pub const AssetDeposit: Balance = Balance::MAX;
+	// TODO: How much account should deposit for a given asset cost?
+	pub const AssetAccountDeposit: Balance = 1_000;
+	// TODO: how much deposit should delegated transfer cost?
+	pub const ApprovalDeposit: Balance = 1_000;
+	pub const MetadataDepositBase: Balance = 0;
+	pub const MetadataDepositPerByte: Balance = 0;
+}
+
+impl pallet_assets::Config for Test {
 	type Event = Event;
 	type Balance = Balance;
 	type AssetId = u32;
-	type Currency = pallet_balances::Pallet<Self>;
+	type Currency = Balances;
+	type ForceOrigin = frame_system::EnsureRoot<u64>;
+	type AssetDeposit = AssetDeposit;
+	type AssetAccountDeposit = AssetAccountDeposit;
+	type MetadataDepositBase = MetadataDepositBase;
+	type MetadataDepositPerByte = MetadataDepositPerByte;
+	type ApprovalDeposit = ApprovalDeposit;
+	type StringLimit = frame_support::traits::ConstU32<20>;
+	type Freezer = ();
+	type Extra = ();
+	type WeightInfo = ();
+}
+
+impl pallet_faterium_polls::Config for Test {
+	type Event = Event;
+	type Fungibles = Assets;
+	type Currency = Balances;
 	type PollIndex = PollIndex;
 	type Scheduler = Scheduler;
 	type PalletsOrigin = OriginCaller;
@@ -163,3 +190,7 @@ fn params_should_work() {
 fn votes(pid: PollIndex) -> Votes<Balance> {
 	FateriumPolls::poll_details_of(pid).unwrap().votes
 }
+
+// fn asset_balance(who: u64) -> Balance {
+// 	Assets::balance(1, &who)
+// }

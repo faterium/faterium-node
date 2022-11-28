@@ -19,13 +19,17 @@ pub use types::*;
 use codec::HasCompact;
 use frame_support::{
 	ensure,
+	inherent::Vec,
 	traits::{
-		schedule::Named as ScheduleNamed, Currency, Get, LockableCurrency, ReservableCurrency,
+		schedule::Named as ScheduleNamed,
+		tokens::fungibles::{Balanced, Inspect, Transfer},
+		Currency, ExistenceRequirement, Get, LockableCurrency, ReservableCurrency,
 	},
 	weights::Weight,
 	PalletId,
 };
 use frame_system::Config as SystemConfig;
+use scale_info::prelude::*;
 use sp_runtime::{
 	traits::{
 		AccountIdConversion, AtLeast32BitUnsigned, CheckedDiv, Saturating, StaticLookup, Zero,
@@ -33,7 +37,15 @@ use sp_runtime::{
 	ArithmeticError, DispatchError, DispatchResult,
 };
 
-type AccountIdLookupOf<T> = <<T as frame_system::Config>::Lookup as StaticLookup>::Source;
+/// Balance type alias.
+pub type BalanceOf<T> =
+	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+/// Account id lookup type alias.
+pub(crate) type AccountIdLookupOf<T> =
+	<<T as frame_system::Config>::Lookup as StaticLookup>::Source;
+/// Asset id type alias.
+pub(crate) type AssetIdOf<T> =
+	<<T as Config>::Fungibles as Inspect<<T as frame_system::Config>::AccountId>>::AssetId;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -53,28 +65,14 @@ pub mod pallet {
 		/// The overarching event type.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 
-		/// The units in which we record balances.
-		type Balance: Member
-			+ Parameter
-			+ AtLeast32BitUnsigned
-			+ Default
-			+ Copy
-			+ MaybeSerializeDeserialize
-			+ MaxEncodedLen
-			+ TypeInfo
-			+ From<DepositBalanceOf<Self>>;
-
-		/// Identifier for the class of asset.
-		type AssetId: Member
-			+ Parameter
-			+ Default
-			+ Copy
-			+ HasCompact
-			+ MaybeSerializeDeserialize
-			+ MaxEncodedLen
-			+ TypeInfo;
+		/// The fungibles instance used for transfers in assets.
+		/// The Balance type should be the same as in balances pallet.
+		type Fungibles: Inspect<Self::AccountId, Balance = BalanceOf<Self>>
+			+ Transfer<Self::AccountId>
+			+ Balanced<Self::AccountId>;
 
 		/// Currency type for this pallet.
+		/// The Balance type should be the same as in assets pallet.
 		type Currency: ReservableCurrency<Self::AccountId>
 			+ LockableCurrency<Self::AccountId, Moment = Self::BlockNumber>;
 
@@ -116,14 +114,19 @@ pub mod pallet {
 		_,
 		Blake2_128Concat,
 		T::PollIndex,
-		PollDetails<T::Balance, T::AccountId, T::AssetId, <T as frame_system::Config>::BlockNumber>,
+		PollDetails<
+			BalanceOf<T>,
+			T::AccountId,
+			AssetIdOf<T>,
+			<T as frame_system::Config>::BlockNumber,
+		>,
 	>;
 
 	/// All votes for a particular voter.
 	#[pallet::storage]
 	#[pallet::getter(fn voting_of)]
 	pub type VotingOf<T: Config> =
-		StorageMap<_, Blake2_128Concat, (T::AccountId, T::PollIndex), AccountVotes<T::Balance>>;
+		StorageMap<_, Blake2_128Concat, (T::AccountId, T::PollIndex), AccountVotes<BalanceOf<T>>>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -133,11 +136,11 @@ pub mod pallet {
 		/// A poll has been cancelled.
 		Cancelled { poll_id: T::PollIndex },
 		/// An account has voted in a poll.
-		Voted { voter: T::AccountId, poll_id: T::PollIndex, votes: Votes<T::Balance> },
+		Voted { voter: T::AccountId, poll_id: T::PollIndex, votes: Votes<BalanceOf<T>> },
 		/// An account has voted in a poll.
 		VoteRemoved { voter: T::AccountId, poll_id: T::PollIndex },
 		/// Voter/beneficiary collected his vote/interest.
-		Collected { who: T::AccountId, poll_id: T::PollIndex, amount: T::Balance },
+		Collected { who: T::AccountId, poll_id: T::PollIndex, amount: BalanceOf<T> },
 	}
 
 	#[pallet::error]
@@ -173,15 +176,27 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		/// Create a poll.
+		///
+		/// The dispatch origin of this call must be _Signed_.
+		///
+		/// - `ipfs_cid`: The IPFS CID of the poll.
+		/// - `beneficiaries`: Beneficiaries of this poll, who will get winning deposit.
+		/// - `reward_settings`: Reward settings of the poll.
+		/// - `goal`: The goal or minimum target amount on one option for the poll to happen.
+		/// - `options_count`: The number of poll options.
+		/// - `currency`: Currency of the poll.
+		/// - `start`: When voting on this poll will begin.
+		/// - `end`: When voting on this poll will end.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn create_poll(
 			origin: OriginFor<T>,
 			ipfs_cid: IpfsCid,
 			beneficiaries: Vec<(AccountIdLookupOf<T>, u32)>,
 			reward_settings: RewardSettings,
-			goal: T::Balance,
+			goal: BalanceOf<T>,
 			options_count: u8,
-			currency: PollCurrency<T::AssetId>,
+			currency: PollCurrency<AssetIdOf<T>>,
 			start: <T as frame_system::Config>::BlockNumber,
 			end: <T as frame_system::Config>::BlockNumber,
 		) -> DispatchResult {
@@ -218,6 +233,13 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Cancel a poll in emergency.
+		///
+		/// Can't be called if poll already finished.
+		///
+		/// The dispatch origin of this call must be _Signed_.
+		///
+		/// - `poll_id`: The index of the poll to cancel.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn emergency_cancel(
 			origin: OriginFor<T>,
@@ -234,13 +256,19 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Vote in a poll.
+		///
+		/// The dispatch origin of this call must be _Signed_.
+		///
+		/// - `poll_id`: The index of the poll to vote for.
+		/// - `votes`: The votes balances, should match number of options.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn vote(
 			origin: OriginFor<T>,
 			#[pallet::compact] poll_id: T::PollIndex,
 			// TODO: Perhaps it's better to receive a vec of Balances with poll_option index
 			// mapping, and then convert it to Votes struct. Instead of receiving zeros.
-			votes: Votes<T::Balance>,
+			votes: Votes<BalanceOf<T>>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// Call inner function.
@@ -250,6 +278,14 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Remove vote from a poll.
+		///
+		/// Origin can remove only own vote. If this function called - all account Votes will be
+		/// removed from a poll, and all staked balances will be returned to origin.
+		///
+		/// Can't be called after finish of a poll.
+		///
+		/// - `poll_id`: The index of the poll to remove votes.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn remove_vote(
 			origin: OriginFor<T>,
@@ -259,86 +295,25 @@ pub mod pallet {
 
 			// TODO: Get and check poll by poll_id
 			// TODO: Remove vote
+			// TODO: Return funds to origin
 
 			// Emit an event.
 			Self::deposit_event(Event::VoteRemoved { voter: who, poll_id });
 			Ok(())
 		}
 
-		/// TODO: Write comment
-		/// Check if account is: in benefitiaries / or is a voter (won or lost) / already
-		/// - Beneficiary=true, Interest=1% of winning poll option amount
-		/// - Voter=true, Interest=99% of his Vote amount
-		/// Check if he is the voter
-		/// - Check benefitiaries interest
-		/// - If benefitiaries sum is 100% - voters should return with Err
+		/// Collect a vote or winning option from a poll.
+		///
+		/// This function will check if account is one of: in benefitiaries,
+		/// or is a voter (poll cancelled or his vote on poll option won/lost).
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn collect(
 			origin: OriginFor<T>,
 			#[pallet::compact] poll_id: T::PollIndex,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			// Get poll and check is it finished or cancelled.
-			let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
-			if poll.status.is_ongoing() {
-				return Err(Error::<T>::CollectOnOngoingPoll.into())
-			}
-			// Find out if origin is a beneficiary or voter.
-			let bnf = poll.find_beneficiary(&who);
-			let voter = VotingOf::<T>::get((&who, poll_id));
-			if bnf.is_none() && voter.is_none() {
-				return Err(Error::<T>::AccountNotVoterOrBeneficiary.into())
-			}
-			// Init needed variables.
-			let win_opt = poll.winning_option();
-			let interest_sum = poll.beneficiary_sum();
-			let mut bnf_interest_amount = T::Balance::zero();
-			let mut voter_return_amount = T::Balance::zero();
-			// Check if win_opt is available.
-			if let Some(win_option) = win_opt {
-				// Check if origin is a beneficiary.
-				if let Some(bnf) = bnf {
-					// Check if origin has funds to collect.
-					if !bnf.collected {
-						bnf_interest_amount = poll.votes.0[win_option as usize]
-							.saturating_mul(bnf.interest.into())
-							.checked_div(&(100u32 * 100u32).into())
-							.ok_or_else(|| ArithmeticError::Underflow)?;
-					}
-				}
-			}
-			// Check if origin is a voter.
-			if let Some(voter) = voter {
-				// Check if origin has funds to collect.
-				if !voter.collected {
-					// TODO: Add rewards collect logic here.
-					for (i, bal) in voter.votes.0.iter().enumerate() {
-						if win_opt.is_some() && i == win_opt.unwrap() as usize {
-							let amount = bal
-								.saturating_mul(interest_sum.into())
-								.checked_div(&(100u32 * 100u32).into())
-								.ok_or_else(|| ArithmeticError::Underflow)?;
-							voter_return_amount = voter_return_amount.saturating_add(amount);
-						} else {
-							voter_return_amount = voter_return_amount.saturating_add(*bal);
-						}
-					}
-				}
-			}
-			// Check is there anything that origin can collect.
-			if bnf_interest_amount.is_zero() && voter_return_amount.is_zero() {
-				return Err(Error::<T>::NothingToCollect.into())
-			}
-			let mut amount = T::Balance::zero();
-			if bnf_interest_amount > Zero::zero() {
-				// TODO: update_collected_beneficiary_in_poll_details();
-				amount = amount.saturating_add(bnf_interest_amount);
-			}
-			if voter_return_amount > Zero::zero() {
-				// TODO: update_collected_account_vote();
-				amount = amount.saturating_add(voter_return_amount);
-			}
-			// TODO: send_money(account, currency, amount);
+			// Call inner function.
+			let amount = Self::try_collect(&who, poll_id)?;
 			// Emit an event.
 			Self::deposit_event(Event::Collected { who, poll_id, amount });
 			Ok(())
@@ -347,7 +322,7 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
-	/// The account ID of the treasury pot.
+	/// The account ID of the faterium polls pot.
 	///
 	/// This actually does computation. If you need to keep using it, then make sure you cache the
 	/// value and only call this once.
@@ -355,13 +330,81 @@ impl<T: Config> Pallet<T> {
 		T::PalletId::get().into_account_truncating()
 	}
 
-	/// Return the amount of money in the pot.
-	// The existential deposit is not part of the pot so account never gets deleted.
-	pub fn pot() -> T::Balance {
+	/// Return the amount of money in the balances pot.
+	/// The existential deposit is not part of the pot so account never gets deleted.
+	pub fn balances_pot() -> BalanceOf<T> {
 		T::Currency::free_balance(&Self::account_id())
 			// Must never be less than 0 but better be safe.
 			.saturating_sub(T::Currency::minimum_balance())
 			.into()
+	}
+
+	/// Return the amount of money in the asset pot by asset_id.
+	pub fn asset_pot(asset_id: AssetIdOf<T>) -> BalanceOf<T> {
+		<T::Fungibles as Inspect<T::AccountId>>::balance(asset_id, &Self::account_id()).into()
+	}
+
+	/// Returns Ok(PollDetails) if the given poll.status is Ongoing, Error::PollInvalid otherwise.
+	fn poll_status(
+		poll_id: T::PollIndex,
+	) -> Result<PollDetails<BalanceOf<T>, T::AccountId, AssetIdOf<T>, T::BlockNumber>, DispatchError>
+	{
+		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
+		match poll.status.is_ongoing() {
+			true => Ok(poll),
+			_ => Err(Error::<T>::PollInvalid.into()),
+		}
+	}
+
+	fn check_balance(
+		who: &T::AccountId,
+		currency: PollCurrency<AssetIdOf<T>>,
+		cap: BalanceOf<T>,
+	) -> DispatchResult {
+		match currency {
+			PollCurrency::Native => {
+				ensure!(
+					cap <= T::Currency::free_balance(who).into(),
+					Error::<T>::InsufficientFunds
+				);
+			},
+			PollCurrency::Asset(asset_id) => {
+				ensure!(
+					cap <= <T::Fungibles as Inspect<T::AccountId>>::balance(asset_id, who).into(),
+					Error::<T>::InsufficientFunds
+				);
+			},
+		}
+		Ok(())
+	}
+
+	fn transfer_balance_to_pot(
+		who: &T::AccountId,
+		currency: PollCurrency<AssetIdOf<T>>,
+		balance: BalanceOf<T>,
+	) -> DispatchResult {
+		match currency {
+			PollCurrency::Native => {
+				// TODO: Perhaps we want make some other function here to not pay fees.
+				T::Currency::transfer(
+					who,
+					&Self::account_id(),
+					balance,
+					ExistenceRequirement::KeepAlive,
+				)?;
+			},
+			PollCurrency::Asset(asset_id) => {
+				// TODO: Perhaps we want make something like `teleport` here to not pay fees.
+				<T::Fungibles as Transfer<T::AccountId>>::transfer(
+					asset_id,
+					who,
+					&Self::account_id(),
+					balance,
+					false,
+				)?;
+			},
+		};
+		Ok(())
 	}
 
 	fn begin_block(_now: T::BlockNumber) -> Weight {
@@ -373,17 +416,19 @@ impl<T: Config> Pallet<T> {
 	fn try_vote(
 		who: &T::AccountId,
 		poll_id: T::PollIndex,
-		votes: Votes<T::Balance>,
+		votes: Votes<BalanceOf<T>>,
 	) -> DispatchResult {
 		let mut poll = Self::poll_status(poll_id)?;
+		// Check if Votes has valid number of options.
 		ensure!(votes.validate(poll.options_count), Error::<T>::InvalidPollVotes);
-		ensure!(
-			votes.capital() <= T::Currency::free_balance(who).into(),
-			Error::<T>::InsufficientFunds
-		);
+		// Check if origin has enough funds.
+		Self::check_balance(who, poll.currency, votes.capital())?;
+		// Actually transfer balance to the pot.
+		Self::transfer_balance_to_pot(who, poll.currency, votes.capital())?;
+		// Set or increase Votes on the poll of origin.
 		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
 			if let Some(v) = voting {
-				v.votes.add(&votes);
+				v.votes.add(&votes).ok_or(ArithmeticError::Overflow)?;
 			} else {
 				*voting = Some(AccountVotes { votes: votes.clone(), collected: false });
 			}
@@ -391,22 +436,77 @@ impl<T: Config> Pallet<T> {
 			poll.votes.add(&votes).ok_or(ArithmeticError::Overflow)?;
 			Ok(())
 		})?;
-		// TODO: Transfer or lock.
-		// Extend the lock to `balance` (rather than setting it) since we don't know what other
-		// votes are in place.
-		// T::Currency::extend_lock(DEMOCRACY_ID, who, vote.balance(), WithdrawReasons::TRANSFER);
+		// Update poll in storage.
 		PollDetailsOf::<T>::insert(poll_id, poll);
 		Ok(())
 	}
 
-	/// Returns Ok(PollDetails) if the given poll.status is Ongoing, Error::PollInvalid otherwise.
-	fn poll_status(
+	/// Actually collect a vote or winning option, if the account is legit.
+	fn try_collect(
+		who: &T::AccountId,
 		poll_id: T::PollIndex,
-	) -> Result<PollDetails<T::Balance, T::AccountId, T::AssetId, T::BlockNumber>, DispatchError> {
+	) -> Result<BalanceOf<T>, DispatchError> {
+		// Get poll and check is it finished or cancelled.
 		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
-		match poll.status.is_ongoing() {
-			true => Ok(poll),
-			_ => Err(Error::<T>::PollInvalid.into()),
+		if poll.status.is_ongoing() {
+			return Err(Error::<T>::CollectOnOngoingPoll.into())
 		}
+		// Find out if origin is a beneficiary or voter.
+		let bnf = poll.find_beneficiary(&who);
+		let voter = VotingOf::<T>::get((&who, poll_id));
+		if bnf.is_none() && voter.is_none() {
+			return Err(Error::<T>::AccountNotVoterOrBeneficiary.into())
+		}
+		// Init needed variables.
+		let win_opt = poll.winning_option();
+		let interest_sum = poll.beneficiary_sum();
+		let mut bnf_interest_amount = BalanceOf::<T>::zero();
+		let mut voter_return_amount = BalanceOf::<T>::zero();
+		// Check if win_opt is available.
+		if let Some(win_option) = win_opt {
+			// Check if origin is a beneficiary.
+			if let Some(bnf) = bnf {
+				// Check if origin has funds to collect.
+				if !bnf.collected {
+					bnf_interest_amount = poll.votes.0[win_option as usize]
+						.saturating_mul(bnf.interest.into())
+						.checked_div(&(100u32 * 100u32).into())
+						.ok_or_else(|| ArithmeticError::Underflow)?;
+				}
+			}
+		}
+		// Check if origin is a voter.
+		if let Some(voter) = voter {
+			// Check if origin has funds to collect.
+			if !voter.collected {
+				// FUTURE WORK TODO: Add rewards collect logic here.
+				for (i, bal) in voter.votes.0.iter().enumerate() {
+					if win_opt.is_some() && i == win_opt.unwrap() as usize {
+						let amount = bal
+							.saturating_mul(interest_sum.into())
+							.checked_div(&(100u32 * 100u32).into())
+							.ok_or_else(|| ArithmeticError::Underflow)?;
+						voter_return_amount = voter_return_amount.saturating_add(amount);
+					} else {
+						voter_return_amount = voter_return_amount.saturating_add(*bal);
+					}
+				}
+			}
+		}
+		// Check is there anything that origin can collect.
+		if bnf_interest_amount.is_zero() && voter_return_amount.is_zero() {
+			return Err(Error::<T>::NothingToCollect.into())
+		}
+		let mut amount = BalanceOf::<T>::zero();
+		if bnf_interest_amount > Zero::zero() {
+			// TODO: update_collected_beneficiary_in_poll_details();
+			amount = amount.saturating_add(bnf_interest_amount);
+		}
+		if voter_return_amount > Zero::zero() {
+			// TODO: update_collected_account_vote();
+			amount = amount.saturating_add(voter_return_amount);
+		}
+		// TODO: send_money(account, currency, amount);
+		Ok(amount)
 	}
 }

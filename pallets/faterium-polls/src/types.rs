@@ -8,7 +8,7 @@ pub type DepositBalanceOf<T> =
 
 pub type IpfsCid = Vec<u8>;
 
-#[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, MaxEncodedLen, TypeInfo)]
+#[derive(Clone, Copy, Encode, Decode, Eq, PartialEq, RuntimeDebug, MaxEncodedLen, TypeInfo)]
 pub enum PollCurrency<AssetId> {
 	/// AssetId from the Assets Pallet.
 	Asset(AssetId),
