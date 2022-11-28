@@ -147,9 +147,6 @@ pub mod pallet {
 	pub enum Error<T> {
 		/// Too high a balance was provided that the account cannot afford.
 		InsufficientFunds,
-		/// The account currently has votes attached to it and the operation cannot succeed until
-		/// these are removed through `remove_vote`.
-		VotesExist,
 		/// Invalid poll details given.
 		InvalidPollDetails,
 		/// Vote given for an invalid poll.
@@ -162,6 +159,10 @@ pub mod pallet {
 		AccountNotVoterOrBeneficiary,
 		/// Nothing to collect or already collected
 		NothingToCollect,
+		/// The account currently has no votes attached to a poll.
+		VotesNotExist,
+		/// FATAL ERROR: The pot account cannot afford to transfer requested funds.
+		PotInsufficientFunds,
 	}
 
 	#[pallet::hooks]
@@ -290,11 +291,8 @@ pub mod pallet {
 			#[pallet::compact] poll_id: T::PollIndex,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-
-			// TODO: Get and check poll by poll_id
-			// TODO: Remove vote
-			// TODO: Return funds to origin
-
+			// Call inner function.
+			Self::try_remove_vote(&who, poll_id)?;
 			// Emit an event.
 			Self::deposit_event(Event::VoteRemoved { voter: who, poll_id });
 			Ok(())
@@ -358,22 +356,12 @@ impl<T: Config> Pallet<T> {
 		who: &T::AccountId,
 		currency: PollCurrency<AssetIdOf<T>>,
 		cap: BalanceOf<T>,
-	) -> DispatchResult {
+	) -> bool {
 		match currency {
-			PollCurrency::Native => {
-				ensure!(
-					cap <= T::Currency::free_balance(who).into(),
-					Error::<T>::InsufficientFunds
-				);
-			},
-			PollCurrency::Asset(asset_id) => {
-				ensure!(
-					cap <= <T::Fungibles as Inspect<T::AccountId>>::balance(asset_id, who).into(),
-					Error::<T>::InsufficientFunds
-				);
-			},
+			PollCurrency::Native => cap <= T::Currency::free_balance(who).into(),
+			PollCurrency::Asset(asset_id) =>
+				cap <= <T::Fungibles as Inspect<T::AccountId>>::balance(asset_id, who).into(),
 		}
-		Ok(())
 	}
 
 	fn transfer_balance(
@@ -385,7 +373,7 @@ impl<T: Config> Pallet<T> {
 		match currency {
 			PollCurrency::Native => {
 				// TODO: Perhaps we want make some other function here to not pay fees.
-				T::Currency::transfer(source, dest, balance, ExistenceRequirement::KeepAlive)?;
+				T::Currency::transfer(source, dest, balance, ExistenceRequirement::AllowDeath)?;
 			},
 			PollCurrency::Asset(asset_id) => {
 				// TODO: Perhaps we want make something like `teleport` here to not pay fees.
@@ -412,10 +400,13 @@ impl<T: Config> Pallet<T> {
 		// Check if Votes has valid number of options.
 		ensure!(votes.validate(poll.options_count), Error::<T>::InvalidPollVotes);
 		// Check if origin has enough funds.
-		Self::check_balance(who, poll.currency, votes.capital())?;
+		ensure!(
+			Self::check_balance(who, poll.currency, votes.capital()),
+			Error::<T>::InsufficientFunds,
+		);
 		// Actually transfer balance to the pot.
 		Self::transfer_balance(who, &Self::account_id(), poll.currency, votes.capital())?;
-		// Set or increase Votes on the poll of origin.
+		// Set or increase Votes on the poll.
 		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
 			if let Some(v) = voting {
 				v.votes.add(&votes).ok_or(ArithmeticError::Overflow)?;
@@ -428,6 +419,33 @@ impl<T: Config> Pallet<T> {
 		})?;
 		// Update poll in storage.
 		PollDetailsOf::<T>::insert(poll_id, poll);
+		Ok(())
+	}
+
+	/// Actually remove a vote from a poll, if legit.
+	fn try_remove_vote(who: &T::AccountId, poll_id: T::PollIndex) -> DispatchResult {
+		let poll = Self::poll_status(poll_id)?;
+		// Get account votes.
+		let voter = VotingOf::<T>::get((who, poll_id)).ok_or(Error::<T>::VotesNotExist)?;
+		// Check if pot has enough funds.
+		ensure!(
+			Self::check_balance(who, poll.currency, voter.votes.capital()),
+			Error::<T>::PotInsufficientFunds,
+		);
+		// Actually remove the vote.
+		VotingOf::<T>::remove((who, poll_id));
+		// Decrease Votes on the poll.
+		PollDetailsOf::<T>::try_mutate(poll_id, |poll| -> DispatchResult {
+			// Shouldn't be possible to fail, but we handle it gracefully.
+			poll.as_mut()
+				.ok_or(Error::<T>::PollInvalid)?
+				.votes
+				.remove(&voter.votes)
+				.ok_or(ArithmeticError::Underflow)?;
+			Ok(())
+		})?;
+		// Actually transfer balance from the pot to account.
+		Self::transfer_balance(&Self::account_id(), who, poll.currency, voter.votes.capital())?;
 		Ok(())
 	}
 
@@ -488,6 +506,15 @@ impl<T: Config> Pallet<T> {
 		if bnf_interest_amount.is_zero() && voter_return_amount.is_zero() {
 			return Err(Error::<T>::NothingToCollect.into())
 		}
+		// Check if pot has enough funds.
+		ensure!(
+			Self::check_balance(
+				who,
+				poll.currency,
+				bnf_interest_amount.saturating_add(voter_return_amount)
+			),
+			Error::<T>::PotInsufficientFunds,
+		);
 		let mut amount = BalanceOf::<T>::zero();
 		if bnf_interest_amount > Zero::zero() {
 			amount = amount.saturating_add(bnf_interest_amount);
