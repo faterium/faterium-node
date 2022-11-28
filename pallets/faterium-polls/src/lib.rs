@@ -53,7 +53,7 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	// TODO: Remove without_storage_info macro.
+	// TODO: Remove without_storage_info macro. And somehow replace Vectors in storages.
 	#[pallet::pallet]
 	#[pallet::without_storage_info]
 	#[pallet::generate_store(pub(super) trait Store)]
@@ -145,8 +145,6 @@ pub mod pallet {
 
 	#[pallet::error]
 	pub enum Error<T> {
-		/// Error names should be descriptive.
-		NoneValue,
 		/// Too high a balance was provided that the account cannot afford.
 		InsufficientFunds,
 		/// The account currently has votes attached to it and the operation cannot succeed until
@@ -378,29 +376,21 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	fn transfer_balance_to_pot(
-		who: &T::AccountId,
+	fn transfer_balance(
+		source: &T::AccountId,
+		dest: &T::AccountId,
 		currency: PollCurrency<AssetIdOf<T>>,
 		balance: BalanceOf<T>,
 	) -> DispatchResult {
 		match currency {
 			PollCurrency::Native => {
 				// TODO: Perhaps we want make some other function here to not pay fees.
-				T::Currency::transfer(
-					who,
-					&Self::account_id(),
-					balance,
-					ExistenceRequirement::KeepAlive,
-				)?;
+				T::Currency::transfer(source, dest, balance, ExistenceRequirement::KeepAlive)?;
 			},
 			PollCurrency::Asset(asset_id) => {
 				// TODO: Perhaps we want make something like `teleport` here to not pay fees.
 				<T::Fungibles as Transfer<T::AccountId>>::transfer(
-					asset_id,
-					who,
-					&Self::account_id(),
-					balance,
-					false,
+					asset_id, source, dest, balance, false,
 				)?;
 			},
 		};
@@ -424,7 +414,7 @@ impl<T: Config> Pallet<T> {
 		// Check if origin has enough funds.
 		Self::check_balance(who, poll.currency, votes.capital())?;
 		// Actually transfer balance to the pot.
-		Self::transfer_balance_to_pot(who, poll.currency, votes.capital())?;
+		Self::transfer_balance(who, &Self::account_id(), poll.currency, votes.capital())?;
 		// Set or increase Votes on the poll of origin.
 		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
 			if let Some(v) = voting {
@@ -447,17 +437,18 @@ impl<T: Config> Pallet<T> {
 		poll_id: T::PollIndex,
 	) -> Result<BalanceOf<T>, DispatchError> {
 		// Get poll and check is it finished or cancelled.
-		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
+		let mut poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
 		if poll.status.is_ongoing() {
 			return Err(Error::<T>::CollectOnOngoingPoll.into())
 		}
 		// Find out if origin is a beneficiary or voter.
-		let bnf = poll.find_beneficiary(&who);
-		let voter = VotingOf::<T>::get((&who, poll_id));
+		let bnf = poll.get_beneficiary(who);
+		let voter = VotingOf::<T>::get((who, poll_id));
 		if bnf.is_none() && voter.is_none() {
 			return Err(Error::<T>::AccountNotVoterOrBeneficiary.into())
 		}
 		// Init needed variables.
+		let currency = poll.currency.clone();
 		let win_opt = poll.winning_option();
 		let interest_sum = poll.beneficiary_sum();
 		let mut bnf_interest_amount = BalanceOf::<T>::zero();
@@ -476,7 +467,7 @@ impl<T: Config> Pallet<T> {
 			}
 		}
 		// Check if origin is a voter.
-		if let Some(voter) = voter {
+		if let Some(voter) = &voter {
 			// Check if origin has funds to collect.
 			if !voter.collected {
 				// FUTURE WORK TODO: Add rewards collect logic here.
@@ -499,14 +490,23 @@ impl<T: Config> Pallet<T> {
 		}
 		let mut amount = BalanceOf::<T>::zero();
 		if bnf_interest_amount > Zero::zero() {
-			// TODO: update_collected_beneficiary_in_poll_details();
 			amount = amount.saturating_add(bnf_interest_amount);
+			// Must never be an error, but better to be safe.
+			let bnf = poll.get_mut_beneficiary(who).ok_or(Error::<T>::PollInvalid)?;
+			bnf.collected = true;
+			// Update poll in storage.
+			PollDetailsOf::<T>::insert(poll_id, poll);
 		}
 		if voter_return_amount > Zero::zero() {
-			// TODO: update_collected_account_vote();
 			amount = amount.saturating_add(voter_return_amount);
+			// Must never be an error, but better to be safe.
+			let mut votes = voter.ok_or(Error::<T>::PollInvalid)?;
+			votes.collected = true;
+			// Update poll vote in storage.
+			VotingOf::<T>::insert((who, poll_id), votes);
 		}
-		// TODO: send_money(account, currency, amount);
+		// Actually transfer balance to the pot.
+		Self::transfer_balance(&Self::account_id(), who, currency, amount)?;
 		Ok(amount)
 	}
 }

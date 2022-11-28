@@ -85,9 +85,17 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, Block
 		true
 	}
 
-	/// Returns true if struct valid, false otherwise.
-	pub fn find_beneficiary(&self, account: &AccountId) -> Option<Beneficiary<AccountId>> {
+	/// Finds and returns beneficiary by account id.
+	pub fn get_beneficiary(&self, account: &AccountId) -> Option<Beneficiary<AccountId>> {
 		self.beneficiaries.iter().find(|&x| x.who.eq(account)).cloned()
+	}
+
+	/// Finds and returns mutable beneficiary by account id.
+	pub fn get_mut_beneficiary(
+		&mut self,
+		account: &AccountId,
+	) -> Option<&mut Beneficiary<AccountId>> {
+		self.beneficiaries.iter_mut().find(|x| x.who.eq(account))
 	}
 
 	pub fn beneficiary_sum(&self) -> u32 {

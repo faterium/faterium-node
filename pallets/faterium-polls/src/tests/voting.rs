@@ -29,9 +29,9 @@ fn vote_with_balances_should_work() {
 		assert_ok!(FateriumPolls::vote(Origin::signed(5), pid, v));
 		assert_eq!(Balances::free_balance(5), 10);
 		assert_eq!(votes(pid), Votes(vec![0, 10, 0]));
-		// assert_ok!(FateriumPolls::remove_vote(Origin::signed(5), pid));
-		// assert_ok!(FateriumPolls::unlock(Origin::signed(5), 5));
-		assert_eq!(Balances::locks(5), vec![]);
+		assert_ok!(FateriumPolls::remove_vote(Origin::signed(5), pid));
+		assert_eq!(votes(pid), Votes(vec![0, 0, 0]));
+		assert_eq!(Balances::free_balance(5), 20);
 	});
 }
 
