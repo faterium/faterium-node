@@ -154,14 +154,14 @@ fn fast_forward_to(n: u64) {
 fn create_poll(who: u64, goal: Balance) -> DispatchResult {
 	FateriumPolls::create_poll(
 		Origin::signed(who),
-		vec![],
+		(0..46).collect(),
 		vec![],
 		RewardSettings::None,
 		goal,
 		3,
 		PollCurrency::Native,
+		1,
 		10,
-		20,
 	)
 }
 

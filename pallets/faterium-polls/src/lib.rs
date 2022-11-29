@@ -38,7 +38,7 @@ use sp_runtime::{
 };
 
 /// Balance type alias.
-pub type BalanceOf<T> =
+pub(crate) type BalanceOf<T> =
 	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 /// Account id lookup type alias.
 pub(crate) type AccountIdLookupOf<T> =
@@ -46,6 +46,8 @@ pub(crate) type AccountIdLookupOf<T> =
 /// Asset id type alias.
 pub(crate) type AssetIdOf<T> =
 	<<T as Config>::Fungibles as Inspect<<T as frame_system::Config>::AccountId>>::AssetId;
+/// Block number type alias.
+pub(crate) type BlockNumberOf<T> = <T as frame_system::Config>::BlockNumber;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -114,12 +116,7 @@ pub mod pallet {
 		_,
 		Blake2_128Concat,
 		T::PollIndex,
-		PollDetails<
-			BalanceOf<T>,
-			T::AccountId,
-			AssetIdOf<T>,
-			<T as frame_system::Config>::BlockNumber,
-		>,
+		PollDetails<BalanceOf<T>, T::AccountId, AssetIdOf<T>, BlockNumberOf<T>>,
 	>;
 
 	/// All votes for a particular voter.
@@ -149,10 +146,16 @@ pub mod pallet {
 		InsufficientFunds,
 		/// Invalid poll details given.
 		InvalidPollDetails,
+		/// Invalid poll start or end given.
+		InvalidPollPeriod,
+		/// Invalid poll currency given.
+		InvalidPollCurrency,
 		/// Vote given for an invalid poll.
 		PollInvalid,
 		/// Invalid number of votes given for a poll.
 		InvalidPollVotes,
+		/// The poll has not yet started.
+		PollNotStarted,
 		/// Can't collect from Ongoing Poll.
 		CollectOnOngoingPoll,
 		/// Account is neither a voter nor a beneficiary.
@@ -180,7 +183,7 @@ pub mod pallet {
 		/// The dispatch origin of this call must be _Signed_.
 		///
 		/// - `ipfs_cid`: The IPFS CID of the poll.
-		/// - `beneficiaries`: Beneficiaries of this poll, who will get winning deposit.
+		/// - `beneficiaries`: Those who will get winning deposit, summary min=0, max=10_000.
 		/// - `reward_settings`: Reward settings of the poll.
 		/// - `goal`: The goal or minimum target amount on one option for the poll to happen.
 		/// - `options_count`: The number of poll options.
@@ -196,8 +199,8 @@ pub mod pallet {
 			goal: BalanceOf<T>,
 			options_count: u8,
 			currency: PollCurrency<AssetIdOf<T>>,
-			start: <T as frame_system::Config>::BlockNumber,
-			end: <T as frame_system::Config>::BlockNumber,
+			start: BlockNumberOf<T>,
+			end: BlockNumberOf<T>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			// Lookup for accounts of beneficiaries.
@@ -205,6 +208,15 @@ pub mod pallet {
 			for b in beneficiaries {
 				let account = T::Lookup::lookup(b.0)?;
 				benfs.push(Beneficiary::new(account, b.1));
+			}
+			// Ensure start and end blocks are valid.
+			let now = <frame_system::Pallet<T>>::block_number();
+			ensure!(start >= now && end > now && end > start, Error::<T>::InvalidPollPeriod);
+			// Ensure currency asset exists.
+			if let PollCurrency::Asset(asset_id) = currency {
+				let total_issuance =
+					<T::Fungibles as Inspect<T::AccountId>>::total_issuance(asset_id);
+				ensure!(total_issuance > BalanceOf::<T>::zero(), Error::<T>::InvalidPollPeriod);
 			}
 			// Create poll details struct.
 			let poll = PollDetails::new(
@@ -284,6 +296,8 @@ pub mod pallet {
 		///
 		/// Can't be called after finish of a poll.
 		///
+		/// The dispatch origin of this call must be _Signed_.
+		///
 		/// - `poll_id`: The index of the poll to remove votes.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn remove_vote(
@@ -298,10 +312,14 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Collect a vote or winning option from a poll.
+		/// Collect a vote stake or/and winning option from a poll.
 		///
 		/// This function will check if account is one of: in benefitiaries,
 		/// or is a voter (poll cancelled or his vote on poll option won/lost).
+		///
+		/// The dispatch origin of this call must be _Signed_.
+		///
+		/// - `poll_id`: The index of the poll to collect.
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn collect(
 			origin: OriginFor<T>,
@@ -399,6 +417,11 @@ impl<T: Config> Pallet<T> {
 		let mut poll = Self::poll_status(poll_id)?;
 		// Check if Votes has valid number of options.
 		ensure!(votes.validate(poll.options_count), Error::<T>::InvalidPollVotes);
+		// Ensure start and end blocks are valid.
+		if let PollStatus::Ongoing { start, .. } = poll.status {
+			let now = <frame_system::Pallet<T>>::block_number();
+			ensure!(start <= now, Error::<T>::PollNotStarted);
+		}
 		// Check if origin has enough funds.
 		ensure!(
 			Self::check_balance(who, poll.currency, votes.capital()),
@@ -409,6 +432,7 @@ impl<T: Config> Pallet<T> {
 		// Set or increase Votes on the poll.
 		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
 			if let Some(v) = voting {
+				// Shouldn't be possible to fail, but we handle it gracefully.
 				v.votes.add(&votes).ok_or(ArithmeticError::Overflow)?;
 			} else {
 				*voting = Some(AccountVotes { votes: votes.clone(), collected: false });

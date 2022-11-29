@@ -81,7 +81,23 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, Block
 
 	/// Returns true if struct valid, false otherwise.
 	pub fn validate(&self) -> bool {
-		// TODO: Validate struct
+		// IPFS CID v0 is 46 bytes; IPFS CID v1 is 59 bytes.
+		let len = self.ipfs_cid.len();
+		if len != 46 && len != 59 {
+			return false
+		}
+		if self.options_count > 10 {
+			return false
+		}
+		if self.beneficiaries.len() > 0 {
+			let sum = self.beneficiary_sum();
+			if sum > 10_000u32 {
+				return false
+			}
+			if sum == 0u32 {
+				return false
+			}
+		}
 		true
 	}
 
