@@ -25,7 +25,6 @@ use frame_support::{
 		tokens::fungibles::{Balanced, Inspect, Transfer},
 		Currency, ExistenceRequirement, Get, LockIdentifier, LockableCurrency, ReservableCurrency,
 	},
-	weights::Weight,
 	PalletId,
 };
 use frame_system::Config as SystemConfig;
@@ -101,11 +100,11 @@ pub mod pallet {
 			+ MaxEncodedLen
 			+ TypeInfo;
 
-		/// The Scheduler.
-		type Scheduler: ScheduleNamed<Self::BlockNumber, Self::PollCall, Self::PalletsOrigin>;
-
 		/// Overarching type of all pallets origins.
 		type PalletsOrigin: From<frame_system::RawOrigin<Self::AccountId>>;
+
+		/// The Scheduler.
+		type Scheduler: ScheduleNamed<Self::BlockNumber, Self::PollCall, Self::PalletsOrigin>;
 
 		/// The polls' pallet id, used for deriving its sovereign account ID.
 		#[pallet::constant]
@@ -174,6 +173,8 @@ pub mod pallet {
 		CollectOnOngoingPoll,
 		/// Account is neither a voter nor a beneficiary.
 		AccountNotVoterOrBeneficiary,
+		/// Account is not an author of the poll.
+		AccountNotAuthor,
 		/// Nothing to collect or already collected
 		NothingToCollect,
 		/// The account currently has no votes attached to a poll.
@@ -182,14 +183,6 @@ pub mod pallet {
 		PotInsufficientFunds,
 		/// FATAL ERROR: The unexpected behavior occur.
 		UnexpectedBehavior,
-	}
-
-	#[pallet::hooks]
-	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		/// Weight: see `begin_block`
-		fn on_initialize(n: T::BlockNumber) -> Weight {
-			Self::begin_block(n)
-		}
 	}
 
 	#[pallet::call]
@@ -256,13 +249,10 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			#[pallet::compact] poll_id: T::PollIndex,
 		) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
-
-			// TODO: Get and check poll by poll_id
-			// TODO: Check if origin is entitled to cancel the poll
-			// TODO: Cancel dispatch
-			// TODO: Update Polls storage and set status to Cancelled
-
+			let who = ensure_signed(origin)?;
+			// Call inner function.
+			Self::try_emergency_cancel(&who, poll_id)?;
+			// Emit an event.
 			Self::deposit_event(Event::<T>::Cancelled { poll_id });
 			Ok(())
 		}
@@ -415,11 +405,6 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	fn begin_block(_now: T::BlockNumber) -> Weight {
-		let weight = Weight::zero();
-		weight
-	}
-
 	/// Actually create a poll.
 	fn try_create_poll(poll: PollTypeOf<T>) -> Result<T::PollIndex, DispatchError> {
 		// Validate poll details.
@@ -457,6 +442,20 @@ impl<T: Config> Pallet<T> {
 			frame_support::print("LOGIC ERROR: try_create_poll/schedule_named failed");
 		}
 		Ok(poll_id)
+	}
+
+	fn try_emergency_cancel(who: &T::AccountId, poll_id: T::PollIndex) -> DispatchResult {
+		let mut poll = Self::poll_status(poll_id)?;
+		// Check if origin is entitled to cancel the poll.
+		ensure!(poll.created_by.eq(who), Error::<T>::AccountNotAuthor);
+		// Cancel dispatch.
+		T::Scheduler::cancel_named((FATERIUM_POLLS_ID, poll_id).encode())
+			.map_err(|_| Error::<T>::UnexpectedBehavior)?;
+		// Set status to Cancelled and update polls storage.
+		let now = <frame_system::Pallet<T>>::block_number();
+		poll.status = PollStatus::Cancelled(now);
+		PollDetailsOf::<T>::insert(poll_id, poll);
+		Ok(())
 	}
 
 	/// Actually enact a vote, if legit.
@@ -566,8 +565,10 @@ impl<T: Config> Pallet<T> {
 				// FUTURE WORK TODO: Add rewards collect logic here.
 				for (i, bal) in voter.votes.0.iter().enumerate() {
 					if win_opt.is_some() && i == win_opt.unwrap() as usize {
+						let return_percent =
+							BalanceOf::<T>::from(10_000u32).saturating_sub(interest_sum.into());
 						let amount = bal
-							.saturating_mul(interest_sum.into())
+							.saturating_mul(return_percent)
 							.checked_div(&(100u32 * 100u32).into())
 							.ok_or_else(|| ArithmeticError::Underflow)?;
 						voter_return_amount = voter_return_amount.saturating_add(amount);

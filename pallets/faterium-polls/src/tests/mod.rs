@@ -143,7 +143,6 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 fn next_block() {
 	System::set_block_number(System::block_number() + 1);
 	Scheduler::on_initialize(System::block_number());
-	FateriumPolls::begin_block(System::block_number());
 }
 
 fn fast_forward_to(n: u64) {
@@ -191,7 +190,3 @@ fn params_should_work() {
 fn votes(pid: PollIndex) -> Votes<Balance> {
 	FateriumPolls::poll_details_of(pid).unwrap().votes
 }
-
-// fn asset_balance(who: u64) -> Balance {
-// 	Assets::balance(1, &who)
-// }

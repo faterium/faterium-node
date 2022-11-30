@@ -192,6 +192,9 @@ impl<Balance: AtLeast32BitUnsigned + Copy> Votes<Balance> {
 		Self((0..options_count).map(|_| Balance::zero()).collect())
 	}
 
+	/// Returns winning option. Returns last max element.
+	///
+	/// TODO: Handle 2 winning options better.
 	pub fn winning_option(&self) -> Option<u8> {
 		let winning_option =
 			self.0.iter().enumerate().max_by_key(|(_idx, &val)| val).map(|(idx, _val)| idx);

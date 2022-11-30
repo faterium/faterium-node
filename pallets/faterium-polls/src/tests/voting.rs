@@ -50,14 +50,6 @@ fn vote_with_balances_should_work() {
 			panic!("poll not finished");
 		}
 		// Try collect as voter and beneficiary.
-		// assert_noop!(
-		// 	FateriumPolls::collect(Origin::signed(5), pid),
-		// 	Error::<Test>::NothingToCollect,
-		// );
+		assert_ok!(FateriumPolls::collect(Origin::signed(5), pid));
 	});
-}
-
-#[test]
-fn vote_cancellation_should_work() {
-	new_test_ext().execute_with(|| {});
 }
