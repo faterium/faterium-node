@@ -123,6 +123,7 @@ impl pallet_assets::Config for Test {
 }
 
 impl pallet_faterium_polls::Config for Test {
+	type PollCall = Call;
 	type Event = Event;
 	type Fungibles = Assets;
 	type Currency = Balances;

@@ -16,14 +16,14 @@ mod types;
 pub use pallet::*;
 pub use types::*;
 
-use codec::HasCompact;
+use codec::{Encode, HasCompact};
 use frame_support::{
 	ensure,
 	inherent::Vec,
 	traits::{
-		schedule::Named as ScheduleNamed,
+		schedule::{DispatchTime, Named as ScheduleNamed},
 		tokens::fungibles::{Balanced, Inspect, Transfer},
-		Currency, ExistenceRequirement, Get, LockableCurrency, ReservableCurrency,
+		Currency, ExistenceRequirement, Get, LockIdentifier, LockableCurrency, ReservableCurrency,
 	},
 	weights::Weight,
 	PalletId,
@@ -32,10 +32,13 @@ use frame_system::Config as SystemConfig;
 use scale_info::prelude::*;
 use sp_runtime::{
 	traits::{
-		AccountIdConversion, AtLeast32BitUnsigned, CheckedDiv, Saturating, StaticLookup, Zero,
+		AccountIdConversion, AtLeast32BitUnsigned, CheckedDiv, Dispatchable, Saturating,
+		StaticLookup, Zero,
 	},
 	ArithmeticError, DispatchError, DispatchResult,
 };
+
+const FATERIUM_POLLS_ID: LockIdentifier = *b"faterium";
 
 /// Balance type alias.
 pub(crate) type BalanceOf<T> =
@@ -48,6 +51,13 @@ pub(crate) type AssetIdOf<T> =
 	<<T as Config>::Fungibles as Inspect<<T as frame_system::Config>::AccountId>>::AssetId;
 /// Block number type alias.
 pub(crate) type BlockNumberOf<T> = <T as frame_system::Config>::BlockNumber;
+/// Poll details type alias.
+pub(crate) type PollTypeOf<T> = PollDetails<
+	BalanceOf<T>,
+	<T as frame_system::Config>::AccountId,
+	AssetIdOf<T>,
+	BlockNumberOf<T>,
+>;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -64,6 +74,8 @@ pub mod pallet {
 	/// The module configuration trait.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
+		/// The overarching call type for Scheduler.
+		type PollCall: Parameter + Dispatchable<Origin = Self::Origin> + From<Call<Self>>;
 		/// The overarching event type.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 
@@ -90,7 +102,7 @@ pub mod pallet {
 			+ TypeInfo;
 
 		/// The Scheduler.
-		type Scheduler: ScheduleNamed<Self::BlockNumber, Self::Call, Self::PalletsOrigin>;
+		type Scheduler: ScheduleNamed<Self::BlockNumber, Self::PollCall, Self::PalletsOrigin>;
 
 		/// Overarching type of all pallets origins.
 		type PalletsOrigin: From<frame_system::RawOrigin<Self::AccountId>>;
@@ -150,12 +162,14 @@ pub mod pallet {
 		InvalidPollPeriod,
 		/// Invalid poll currency given.
 		InvalidPollCurrency,
-		/// Vote given for an invalid poll.
+		/// Invalid poll_id given for a poll.
 		PollInvalid,
 		/// Invalid number of votes given for a poll.
 		InvalidPollVotes,
 		/// The poll has not yet started.
 		PollNotStarted,
+		/// The poll has already finished.
+		PollAlreadyFinished,
 		/// Can't collect from Ongoing Poll.
 		CollectOnOngoingPoll,
 		/// Account is neither a voter nor a beneficiary.
@@ -166,6 +180,8 @@ pub mod pallet {
 		VotesNotExist,
 		/// FATAL ERROR: The pot account cannot afford to transfer requested funds.
 		PotInsufficientFunds,
+		/// FATAL ERROR: The unexpected behavior occur.
+		UnexpectedBehavior,
 	}
 
 	#[pallet::hooks]
@@ -209,15 +225,6 @@ pub mod pallet {
 				let account = T::Lookup::lookup(b.0)?;
 				benfs.push(Beneficiary::new(account, b.1));
 			}
-			// Ensure start and end blocks are valid.
-			let now = <frame_system::Pallet<T>>::block_number();
-			ensure!(start >= now && end > now && end > start, Error::<T>::InvalidPollPeriod);
-			// Ensure currency asset exists.
-			if let PollCurrency::Asset(asset_id) = currency {
-				let total_issuance =
-					<T::Fungibles as Inspect<T::AccountId>>::total_issuance(asset_id);
-				ensure!(total_issuance > BalanceOf::<T>::zero(), Error::<T>::InvalidPollPeriod);
-			}
 			// Create poll details struct.
 			let poll = PollDetails::new(
 				who.clone(),
@@ -230,15 +237,8 @@ pub mod pallet {
 				start,
 				end,
 			);
-			// Validate poll details.
-			ensure!(poll.validate(), Error::<T>::InvalidPollDetails);
-			// Get next poll_id from storage.
-			let poll_id = PollCount::<T>::get();
-			PollDetailsOf::<T>::insert(poll_id, poll);
-			// Updates poll count.
-			let mut next_id = poll_id;
-			next_id.saturating_inc();
-			PollCount::<T>::put(next_id);
+			// Call inner function.
+			let poll_id = Self::try_create_poll(poll)?;
 			// Emit an event.
 			Self::deposit_event(Event::Created { poll_id, creator: who });
 			Ok(())
@@ -332,6 +332,17 @@ pub mod pallet {
 			Self::deposit_event(Event::Collected { who, poll_id, amount });
 			Ok(())
 		}
+
+		/// Enact poll end.
+		///
+		/// The dispatch origin of this call must be _ROOT_.
+		///
+		/// - `poll_id`: The index of the poll to enact end.
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
+		pub fn enact_poll_end(origin: OriginFor<T>, poll_id: T::PollIndex) -> DispatchResult {
+			ensure_root(origin)?;
+			Self::do_enact_poll_end(poll_id)
+		}
 	}
 }
 
@@ -358,7 +369,8 @@ impl<T: Config> Pallet<T> {
 		<T::Fungibles as Inspect<T::AccountId>>::balance(asset_id, &Self::account_id()).into()
 	}
 
-	/// Returns Ok(PollDetails) if the given poll.status is Ongoing, Error::PollInvalid otherwise.
+	/// Returns Ok(PollDetails) if the given poll.status is Ongoing,
+	/// Error::PollInvalid or Error::PollAlreadyFinished otherwise.
 	fn poll_status(
 		poll_id: T::PollIndex,
 	) -> Result<PollDetails<BalanceOf<T>, T::AccountId, AssetIdOf<T>, T::BlockNumber>, DispatchError>
@@ -366,7 +378,7 @@ impl<T: Config> Pallet<T> {
 		let poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::PollInvalid)?;
 		match poll.status.is_ongoing() {
 			true => Ok(poll),
-			_ => Err(Error::<T>::PollInvalid.into()),
+			_ => Err(Error::<T>::PollAlreadyFinished.into()),
 		}
 	}
 
@@ -406,6 +418,45 @@ impl<T: Config> Pallet<T> {
 	fn begin_block(_now: T::BlockNumber) -> Weight {
 		let weight = Weight::zero();
 		weight
+	}
+
+	/// Actually create a poll.
+	fn try_create_poll(poll: PollTypeOf<T>) -> Result<T::PollIndex, DispatchError> {
+		// Validate poll details.
+		ensure!(poll.validate(), Error::<T>::InvalidPollDetails);
+		let (start, end) = match poll.status {
+			PollStatus::Ongoing { start, end } => (start, end),
+			_ => return Err(Error::<T>::InvalidPollDetails.into()),
+		};
+		// Ensure start and end blocks are valid.
+		let now = <frame_system::Pallet<T>>::block_number();
+		ensure!(start >= now && end > now && end > start, Error::<T>::InvalidPollPeriod);
+		// Ensure currency asset exists.
+		if let PollCurrency::Asset(asset_id) = poll.currency {
+			let total_issuance = <T::Fungibles as Inspect<T::AccountId>>::total_issuance(asset_id);
+			ensure!(total_issuance > BalanceOf::<T>::zero(), Error::<T>::InvalidPollPeriod);
+		}
+		// Get next poll_id from storage.
+		let poll_id = PollCount::<T>::get();
+		PollDetailsOf::<T>::insert(poll_id, poll);
+		// Updates poll count.
+		let mut next_id = poll_id;
+		next_id.saturating_inc();
+		PollCount::<T>::put(next_id);
+		// Actually schedule end of the poll.
+		if T::Scheduler::schedule_named(
+			(FATERIUM_POLLS_ID, poll_id).encode(),
+			DispatchTime::At(end),
+			None,
+			63,
+			frame_system::RawOrigin::Root.into(),
+			Call::enact_poll_end { poll_id }.into(),
+		)
+		.is_err()
+		{
+			frame_support::print("LOGIC ERROR: try_create_poll/schedule_named failed");
+		}
+		Ok(poll_id)
 	}
 
 	/// Actually enact a vote, if legit.
@@ -462,7 +513,7 @@ impl<T: Config> Pallet<T> {
 		PollDetailsOf::<T>::try_mutate(poll_id, |poll| -> DispatchResult {
 			// Shouldn't be possible to fail, but we handle it gracefully.
 			poll.as_mut()
-				.ok_or(Error::<T>::PollInvalid)?
+				.ok_or(Error::<T>::UnexpectedBehavior)?
 				.votes
 				.remove(&voter.votes)
 				.ok_or(ArithmeticError::Underflow)?;
@@ -543,7 +594,7 @@ impl<T: Config> Pallet<T> {
 		if bnf_interest_amount > Zero::zero() {
 			amount = amount.saturating_add(bnf_interest_amount);
 			// Must never be an error, but better to be safe.
-			let bnf = poll.get_mut_beneficiary(who).ok_or(Error::<T>::PollInvalid)?;
+			let bnf = poll.get_mut_beneficiary(who).ok_or(Error::<T>::UnexpectedBehavior)?;
 			bnf.collected = true;
 			// Update poll in storage.
 			PollDetailsOf::<T>::insert(poll_id, poll);
@@ -551,7 +602,7 @@ impl<T: Config> Pallet<T> {
 		if voter_return_amount > Zero::zero() {
 			amount = amount.saturating_add(voter_return_amount);
 			// Must never be an error, but better to be safe.
-			let mut votes = voter.ok_or(Error::<T>::PollInvalid)?;
+			let mut votes = voter.ok_or(Error::<T>::UnexpectedBehavior)?;
 			votes.collected = true;
 			// Update poll vote in storage.
 			VotingOf::<T>::insert((who, poll_id), votes);
@@ -559,5 +610,21 @@ impl<T: Config> Pallet<T> {
 		// Actually transfer balance to the pot.
 		Self::transfer_balance(&Self::account_id(), who, currency, amount)?;
 		Ok(amount)
+	}
+
+	/// Actually finish the poll, if the poll is legit.
+	fn do_enact_poll_end(poll_id: T::PollIndex) -> DispatchResult {
+		let mut poll = PollDetailsOf::<T>::get(poll_id).ok_or(Error::<T>::UnexpectedBehavior)?;
+		// Shouldn't be any other status than Ongoing, but better be safe.
+		let end = match poll.status {
+			PollStatus::Ongoing { end, .. } => end,
+			_ => return Err(Error::<T>::PollAlreadyFinished.into()),
+		};
+		// Determine winning option and update status.
+		let winning_option = poll.votes.winning_option().ok_or(Error::<T>::UnexpectedBehavior)?;
+		poll.status = PollStatus::Finished { winning_option, end };
+		// Update poll in storage.
+		PollDetailsOf::<T>::insert(poll_id, poll);
+		Ok(())
 	}
 }

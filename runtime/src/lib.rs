@@ -321,6 +321,7 @@ parameter_types! {
 
 /// Configure the pallet-faterium-polls in pallets/faterium-polls.
 impl pallet_faterium_polls::Config for Runtime {
+	type PollCall = Call;
 	type Event = Event;
 	type Fungibles = Assets;
 	type Currency = Balances;

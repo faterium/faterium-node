@@ -98,6 +98,9 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, Block
 				return false
 			}
 		}
+		if !self.status.is_ongoing() {
+			return false
+		}
 		true
 	}
 
@@ -187,6 +190,12 @@ pub struct Votes<Balance>(pub Vec<Balance>);
 impl<Balance: AtLeast32BitUnsigned + Copy> Votes<Balance> {
 	pub fn new(options_count: u8) -> Self {
 		Self((0..options_count).map(|_| Balance::zero()).collect())
+	}
+
+	pub fn winning_option(&self) -> Option<u8> {
+		let winning_option =
+			self.0.iter().enumerate().max_by_key(|(_idx, &val)| val).map(|(idx, _val)| idx);
+		winning_option.map(|x| x as u8)
 	}
 
 	pub fn validate(&self, options_count: u8) -> bool {
