@@ -1,0 +1,23 @@
+name: Publish Docker images
+on:
+  push:
+    branches: [main]
+    paths:
+    - '.github/workflows/docker.yml'
+    - '.Dockerfile'
+    - '**.rs'
+    - '**.toml'
+jobs:
+  build-publish-docker:
+    name: Build Faterium Node Dockerfile
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@master
+    - name: Build Docker image
+      run: docker build -t ghcr.io/faterium/faterium-node -f .github/docker/Dockerfile .
+    - name: Publish Docker Image
+      env:
+        DOCKER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo $DOCKER_TOKEN | docker login ghcr.io -u enfipy --password-stdin
+        docker push ghcr.io/faterium/faterium-node
