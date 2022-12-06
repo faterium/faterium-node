@@ -140,7 +140,7 @@ pub mod pallet {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		/// A poll was created.
-		Created { poll_id: T::PollIndex, creator: T::AccountId },
+		Created { poll_id: T::PollIndex, cid: IpfsCid, creator: T::AccountId },
 		/// A poll has been cancelled.
 		Cancelled { poll_id: T::PollIndex },
 		/// An account has voted in a poll.
@@ -149,6 +149,8 @@ pub mod pallet {
 		VoteRemoved { voter: T::AccountId, poll_id: T::PollIndex },
 		/// Voter/beneficiary collected his vote/interest.
 		Collected { who: T::AccountId, poll_id: T::PollIndex, amount: BalanceOf<T> },
+		/// A poll was finished.
+		Finished { poll_id: T::PollIndex },
 	}
 
 	#[pallet::error]
@@ -221,7 +223,7 @@ pub mod pallet {
 			// Create poll details struct.
 			let poll = PollDetails::new(
 				who.clone(),
-				ipfs_cid,
+				ipfs_cid.clone(),
 				benfs,
 				reward_settings,
 				goal,
@@ -233,7 +235,7 @@ pub mod pallet {
 			// Call inner function.
 			let poll_id = Self::try_create_poll(poll)?;
 			// Emit an event.
-			Self::deposit_event(Event::Created { poll_id, creator: who });
+			Self::deposit_event(Event::Created { poll_id, cid: ipfs_cid, creator: who });
 			Ok(())
 		}
 
@@ -331,7 +333,10 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,2).ref_time())]
 		pub fn enact_poll_end(origin: OriginFor<T>, poll_id: T::PollIndex) -> DispatchResult {
 			ensure_root(origin)?;
-			Self::do_enact_poll_end(poll_id)
+			Self::do_enact_poll_end(poll_id)?;
+			// Emit an event.
+			Self::deposit_event(Event::Finished { poll_id });
+			Ok(())
 		}
 	}
 }
@@ -621,9 +626,15 @@ impl<T: Config> Pallet<T> {
 			PollStatus::Ongoing { end, .. } => end,
 			_ => return Err(Error::<T>::PollAlreadyFinished.into()),
 		};
-		// Determine winning option and update status.
-		let winning_option = poll.votes.winning_option().ok_or(Error::<T>::UnexpectedBehavior)?;
-		poll.status = PollStatus::Finished { winning_option, end };
+		// If poll reached it's goal - mark as finished; if not - mark as failed.
+		if poll.votes.capital() >= poll.goal {
+			// Determine winning option and update status.
+			let winning_option =
+				poll.votes.winning_option().ok_or(Error::<T>::UnexpectedBehavior)?;
+			poll.status = PollStatus::Finished { winning_option, end };
+		} else {
+			poll.status = PollStatus::Failed(end);
+		}
 		// Update poll in storage.
 		PollDetailsOf::<T>::insert(poll_id, poll);
 		Ok(())

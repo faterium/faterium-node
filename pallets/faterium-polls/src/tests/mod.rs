@@ -167,7 +167,7 @@ fn create_poll(who: u64, goal: Balance) -> DispatchResult {
 
 fn begin_poll() -> PollIndex {
 	System::set_block_number(0);
-	assert_ok!(create_poll(1, 100));
+	assert_ok!(create_poll(1, 10));
 	fast_forward_to(2);
 	0
 }

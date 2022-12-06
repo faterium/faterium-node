@@ -238,7 +238,7 @@ impl pallet_timestamp::Config for Runtime {
 }
 
 /// Existential deposit.
-pub const EXISTENTIAL_DEPOSIT: u128 = 500;
+pub const EXISTENTIAL_DEPOSIT: u128 = 0;
 
 impl pallet_balances::Config for Runtime {
 	type MaxLocks = ConstU32<50>;
@@ -271,9 +271,9 @@ impl pallet_sudo::Config for Runtime {
 parameter_types! {
 	pub const AssetDeposit: Balance = Balance::MAX;
 	// TODO: How much account should deposit for a given asset cost?
-	pub const AssetAccountDeposit: Balance = 1_000;
+	pub const AssetAccountDeposit: Balance = 0;
 	// TODO: how much deposit should delegated transfer cost?
-	pub const ApprovalDeposit: Balance = 1_000;
+	pub const ApprovalDeposit: Balance = 0;
 	pub const MetadataDepositBase: Balance = 0;
 	pub const MetadataDepositPerByte: Balance = 0;
 }

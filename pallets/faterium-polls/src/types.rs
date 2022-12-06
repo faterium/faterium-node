@@ -165,6 +165,8 @@ pub enum PollStatus<BlockNumber> {
 		/// When voting on this poll ended.
 		end: BlockNumber,
 	},
+	/// Poll finished but the goal hasn't been reached.
+	Failed(BlockNumber),
 }
 
 impl<BlockNumber> PollStatus<BlockNumber> {
