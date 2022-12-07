@@ -31,6 +31,14 @@ Use Rust's native `cargo` command to build and launch the faterium node:
 cargo run --release -- --dev
 ```
 
+### Test
+
+Use Rust's native `cargo` command to test faterium-polls pallet:
+
+```sh
+cargo test -p pallet-faterium-polls
+```
+
 ### Build
 
 The `cargo run` command will perform an initial build. Use the following command to build the node
