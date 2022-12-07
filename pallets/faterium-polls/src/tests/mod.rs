@@ -97,10 +97,8 @@ impl pallet_balances::Config for Test {
 
 parameter_types! {
 	pub const AssetDeposit: Balance = Balance::MAX;
-	// TODO: How much account should deposit for a given asset cost?
-	pub const AssetAccountDeposit: Balance = 1_000;
-	// TODO: how much deposit should delegated transfer cost?
-	pub const ApprovalDeposit: Balance = 1_000;
+	pub const AssetAccountDeposit: Balance = 0;
+	pub const ApprovalDeposit: Balance = 0;
 	pub const MetadataDepositBase: Balance = 0;
 	pub const MetadataDepositPerByte: Balance = 0;
 }
@@ -167,6 +165,34 @@ fn begin_poll(who: u64, bnfs: Vec<(u64, u32)>, goal: Balance) -> PollIndex {
 	assert_ok!(res);
 	fast_forward_to(2);
 	0
+}
+
+fn begin_poll_with_asset(
+	who: u64,
+	voter: u64,
+	bnfs: Vec<(u64, u32)>,
+	balance: Balance,
+) -> (PollIndex, u32) {
+	System::set_block_number(0);
+	// Create asset
+	let asset_id = 0;
+	assert_ok!(Assets::force_create(Origin::root(), asset_id, who, false, 1));
+	assert_ok!(Assets::mint(Origin::signed(who), asset_id, voter, balance));
+	// Create poll
+	let res = FateriumPolls::create_poll(
+		Origin::signed(who),
+		(0..46).collect(),
+		bnfs,
+		RewardSettings::None,
+		10,
+		3,
+		PollCurrency::Asset(0),
+		1,
+		10,
+	);
+	assert_ok!(res);
+	fast_forward_to(2);
+	(0, asset_id)
 }
 
 fn set_balances(acc: u64) {

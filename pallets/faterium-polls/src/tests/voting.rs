@@ -236,3 +236,46 @@ fn not_reaching_goal_should_fail() {
 		assert_ok!(FateriumPolls::collect(Origin::signed(voter), pid));
 	});
 }
+
+#[test]
+fn vote_with_assets_should_work() {
+	new_test_ext().execute_with(|| {
+		let poll_creator = 1;
+		let voter = 2;
+		let voter_balance = 20;
+		// Creates poll
+		set_balances(voter);
+		let (pid, asset_id) = begin_poll_with_asset(poll_creator, voter, vec![], voter_balance);
+		// Vote on poll
+		let v = Votes(vec![0, 10, 0]);
+		assert_ok!(FateriumPolls::vote(Origin::signed(voter), pid, v.clone()));
+		assert_eq!(Assets::balance(asset_id, voter), voter_balance - 10);
+		assert_eq!(votes(pid), Votes(vec![0, 10, 0]));
+		next_block();
+		// Remove vote
+		assert_ok!(FateriumPolls::remove_vote(Origin::signed(voter), pid));
+		assert_eq!(votes(pid), Votes(vec![0, 0, 0]));
+		assert_eq!(Assets::balance(asset_id, voter), voter_balance);
+		next_block();
+		// Vote again
+		assert_ok!(FateriumPolls::vote(Origin::signed(voter), pid, v));
+		// Finish poll
+		fast_forward_to(10);
+		assert_eq!(FateriumPolls::poll_count(), 1);
+		// Can't remove vote after finish
+		assert_noop!(
+			FateriumPolls::remove_vote(Origin::signed(voter), pid),
+			Error::<Test>::PollAlreadyFinished,
+		);
+		// Check if winning option is correct.
+		let poll = FateriumPolls::poll_details_of(pid).unwrap();
+		if let PollStatus::Finished { winning_option, end } = poll.status {
+			assert_eq!(winning_option, 1);
+			assert_eq!(end, 10);
+		} else {
+			panic!("poll not finished");
+		}
+		// Try collect as voter and beneficiary.
+		assert_ok!(FateriumPolls::collect(Origin::signed(voter), pid));
+	});
+}
