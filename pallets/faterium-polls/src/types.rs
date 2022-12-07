@@ -89,6 +89,9 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, Block
 		if self.options_count > 10 {
 			return false
 		}
+		if self.options_count < 2 {
+			return false
+		}
 		if self.beneficiaries.len() > 0 {
 			let sum = self.beneficiary_sum();
 			if sum > 10_000u32 {

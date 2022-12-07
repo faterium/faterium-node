@@ -424,7 +424,7 @@ impl<T: Config> Pallet<T> {
 		// Ensure currency asset exists.
 		if let PollCurrency::Asset(asset_id) = poll.currency {
 			let total_issuance = <T::Fungibles as Inspect<T::AccountId>>::total_issuance(asset_id);
-			ensure!(total_issuance > BalanceOf::<T>::zero(), Error::<T>::InvalidPollPeriod);
+			ensure!(total_issuance > BalanceOf::<T>::zero(), Error::<T>::InvalidPollCurrency);
 		}
 		// Get next poll_id from storage.
 		let poll_id = PollCount::<T>::get();
@@ -590,7 +590,7 @@ impl<T: Config> Pallet<T> {
 		// Check if pot has enough funds.
 		ensure!(
 			Self::check_balance(
-				who,
+				&Self::account_id(),
 				poll.currency,
 				bnf_interest_amount.saturating_add(voter_return_amount)
 			),

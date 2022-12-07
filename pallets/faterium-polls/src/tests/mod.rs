@@ -12,7 +12,7 @@ use sp_core::H256;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
-	DispatchResult, Perbill,
+	Perbill,
 };
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
@@ -151,31 +151,29 @@ fn fast_forward_to(n: u64) {
 	}
 }
 
-fn create_poll(who: u64, goal: Balance) -> DispatchResult {
-	FateriumPolls::create_poll(
+fn begin_poll(who: u64, bnfs: Vec<(u64, u32)>, goal: Balance) -> PollIndex {
+	System::set_block_number(0);
+	let res = FateriumPolls::create_poll(
 		Origin::signed(who),
 		(0..46).collect(),
-		vec![],
+		bnfs,
 		RewardSettings::None,
 		goal,
 		3,
 		PollCurrency::Native,
 		1,
 		10,
-	)
-}
-
-fn begin_poll() -> PollIndex {
-	System::set_block_number(0);
-	assert_ok!(create_poll(1, 10));
+	);
+	assert_ok!(res);
 	fast_forward_to(2);
 	0
 }
 
-fn begin_poll_with_balances(acc: u64) -> PollIndex {
+fn set_balances(acc: u64) {
 	assert_ok!(Balances::set_balance(Origin::root(), acc, 20, 0));
+	// Set existential deposit for pot
+	assert_ok!(Balances::set_balance(Origin::root(), FateriumPolls::account_id(), 1, 0));
 	assert_eq!(Balances::free_balance(acc), 20);
-	begin_poll()
 }
 
 #[test]
