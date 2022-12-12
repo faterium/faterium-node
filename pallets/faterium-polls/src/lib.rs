@@ -165,8 +165,10 @@ pub mod pallet {
 		InvalidPollCurrency,
 		/// Invalid poll_id given for a poll.
 		PollInvalid,
-		/// Invalid number of votes given for a poll.
+		/// Invalid votes given for a poll.
 		InvalidPollVotes,
+		/// Multiple votes on the poll are not allowed.
+		MultipleVotesNotAllowed,
 		/// The poll has not yet started.
 		PollNotStarted,
 		/// The poll has already finished.
@@ -198,6 +200,7 @@ pub mod pallet {
 		/// - `reward_settings`: Reward settings of the poll.
 		/// - `goal`: The goal or minimum target amount on one option for the poll to happen.
 		/// - `options_count`: The number of poll options.
+		/// - `multiple_votes`: Make it possible to vote for multiple options.
 		/// - `currency`: Currency of the poll.
 		/// - `start`: When voting on this poll will begin.
 		/// - `end`: When voting on this poll will end.
@@ -209,6 +212,7 @@ pub mod pallet {
 			reward_settings: RewardSettings,
 			goal: BalanceOf<T>,
 			options_count: u8,
+			multiple_votes: bool,
 			currency: PollCurrency<AssetIdOf<T>>,
 			start: BlockNumberOf<T>,
 			end: BlockNumberOf<T>,
@@ -228,6 +232,7 @@ pub mod pallet {
 				reward_settings,
 				goal,
 				options_count,
+				multiple_votes,
 				currency,
 				start,
 				end,
@@ -472,6 +477,19 @@ impl<T: Config> Pallet<T> {
 		let mut poll = Self::poll_status(poll_id)?;
 		// Check if Votes has valid number of options.
 		ensure!(votes.validate(poll.options_count), Error::<T>::InvalidPollVotes);
+		// Check if Votes capital is more than zero.
+		let votes_capital = votes.capital();
+		ensure!(votes_capital > Zero::zero(), Error::<T>::InvalidPollVotes);
+		// Check if Multiple Votes are allowed.
+		ensure!(
+			(poll.multiple_votes && votes.non_zero_count() >= 1) ||
+				(!poll.multiple_votes && votes.non_zero_count() == 1),
+			Error::<T>::MultipleVotesNotAllowed,
+		);
+		if !poll.multiple_votes {
+			let voting = VotingOf::<T>::get((who, poll_id));
+			ensure!(voting.is_none(), Error::<T>::MultipleVotesNotAllowed);
+		}
 		// Ensure start and end blocks are valid.
 		if let PollStatus::Ongoing { start, .. } = poll.status {
 			let now = <frame_system::Pallet<T>>::block_number();
@@ -479,11 +497,11 @@ impl<T: Config> Pallet<T> {
 		}
 		// Check if origin has enough funds.
 		ensure!(
-			Self::check_balance(who, poll.currency, votes.capital()),
+			Self::check_balance(who, poll.currency, votes_capital),
 			Error::<T>::InsufficientFunds,
 		);
 		// Actually transfer balance to the pot.
-		Self::transfer_balance(who, &Self::account_id(), poll.currency, votes.capital())?;
+		Self::transfer_balance(who, &Self::account_id(), poll.currency, votes_capital)?;
 		// Set or increase Votes on the poll.
 		VotingOf::<T>::try_mutate((who, poll_id), |voting| -> DispatchResult {
 			if let Some(v) = voting {

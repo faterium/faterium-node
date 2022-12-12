@@ -6,7 +6,7 @@ use super::*;
 fn vote_without_balance_should_fail() {
 	new_test_ext().execute_with(|| {
 		// Creates poll
-		let pid = begin_poll(1, vec![], 10);
+		let pid = begin_poll(1, vec![], 10, false);
 		// Try to vote without balance
 		let v = Votes(vec![0, 10, 0]);
 		assert_noop!(
@@ -22,12 +22,30 @@ fn vote_with_balances_should_work() {
 		let voter = 2;
 		// Creates poll
 		set_balances(voter);
-		let pid = begin_poll(1, vec![], 10);
+		let pid = begin_poll(1, vec![], 10, false);
 		// Vote on poll
 		let v = Votes(vec![0, 10, 0]);
 		assert_ok!(FateriumPolls::vote(Origin::signed(voter), pid, v.clone()));
 		assert_eq!(Balances::free_balance(voter), 10);
 		assert_eq!(votes(pid), Votes(vec![0, 10, 0]));
+		// Try make multiple votes
+		assert_noop!(
+			FateriumPolls::vote(Origin::signed(voter), pid, Votes(vec![0, 5, 5])),
+			Error::<Test>::MultipleVotesNotAllowed,
+		);
+		assert_noop!(
+			FateriumPolls::vote(Origin::signed(voter), pid, Votes(vec![10, 0, 0])),
+			Error::<Test>::MultipleVotesNotAllowed,
+		);
+		assert_noop!(
+			FateriumPolls::vote(Origin::signed(voter), pid, v.clone()),
+			Error::<Test>::MultipleVotesNotAllowed,
+		);
+		// Try vote with zero balances in votes
+		assert_noop!(
+			FateriumPolls::vote(Origin::signed(voter), pid, Votes(vec![0, 0, 0])),
+			Error::<Test>::InvalidPollVotes,
+		);
 		next_block();
 		// Remove vote
 		assert_ok!(FateriumPolls::remove_vote(Origin::signed(voter), pid));
@@ -63,7 +81,7 @@ fn emergency_cancel_should_work() {
 		let voter = 5;
 		// Creates poll
 		set_balances(voter);
-		let pid = begin_poll(1, vec![], 10);
+		let pid = begin_poll(1, vec![], 10, true);
 		// Vote on poll
 		let v = Votes(vec![0, 10, 0]);
 		assert_ok!(FateriumPolls::vote(Origin::signed(voter), pid, v.clone()));
@@ -94,7 +112,7 @@ fn multiple_voters_zero_interest() {
 		let voter_3 = 4;
 		// Creates poll
 		set_balances(5);
-		let pid = begin_poll(1, vec![], 10);
+		let pid = begin_poll(1, vec![], 10, true);
 		// Vote on poll #1
 		let v = Votes(vec![0, 10, 0]);
 		assert_ok!(Balances::set_balance(Origin::root(), voter_1, initial_balance, 0));
@@ -136,7 +154,7 @@ fn multi_voters_multi_bnfs_full_interest() {
 		set_balances(5);
 		let bnf_1 = 11;
 		let bnf_2 = 12;
-		let pid = begin_poll(1, vec![(bnf_1, 5000), (bnf_2, 5000)], 10);
+		let pid = begin_poll(1, vec![(bnf_1, 5000), (bnf_2, 5000)], 10, true);
 		// Vote on poll #1
 		let voter_1 = 3;
 		let v = Votes(vec![0, 0, 70]);
@@ -178,7 +196,7 @@ fn multi_voters_multi_bnfs_partial_interest() {
 		set_balances(5);
 		let bnf_1 = 11;
 		let bnf_2 = 12;
-		let pid = begin_poll(1, vec![(bnf_1, 2500), (bnf_2, 3500)], 10);
+		let pid = begin_poll(1, vec![(bnf_1, 2500), (bnf_2, 3500)], 10, true);
 		assert_eq!(Balances::free_balance(bnf_1), 0);
 		assert_eq!(Balances::free_balance(bnf_2), 0);
 		// Vote on poll #1
@@ -218,7 +236,7 @@ fn not_reaching_goal_should_fail() {
 		let bnf = 11;
 		// Creates poll
 		set_balances(voter);
-		let pid = begin_poll(1, vec![(bnf, 2500)], 100);
+		let pid = begin_poll(1, vec![(bnf, 2500)], 100, false);
 		// Vote once
 		let v = Votes(vec![0, 0, 20]);
 		assert_ok!(FateriumPolls::vote(Origin::signed(voter), pid, v.clone()));

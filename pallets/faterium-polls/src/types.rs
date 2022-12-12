@@ -43,6 +43,8 @@ pub struct PollDetails<Balance, AccountId, AssetId, BlockNumber> {
 	pub goal: Balance,
 	/// The number of poll options.
 	pub options_count: u8,
+	/// Make it possible to vote for multiple options.
+	pub multiple_votes: bool,
 	/// Info regrading stake on poll options.
 	pub votes: Votes<Balance>,
 	/// Currency of the poll.
@@ -62,6 +64,7 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, Block
 		reward_settings: RewardSettings,
 		goal: Balance,
 		options_count: u8,
+		multiple_votes: bool,
 		currency: PollCurrency<AssetId>,
 		start: BlockNumber,
 		end: BlockNumber,
@@ -73,6 +76,7 @@ impl<Balance: AtLeast32BitUnsigned + Copy, AccountId: Clone + Eq, AssetId, Block
 			reward_settings,
 			goal,
 			options_count,
+			multiple_votes,
 			votes: Votes::new(options_count),
 			currency,
 			status: PollStatus::Ongoing { start, end },
@@ -208,6 +212,14 @@ impl<Balance: AtLeast32BitUnsigned + Copy> Votes<Balance> {
 
 	pub fn validate(&self, options_count: u8) -> bool {
 		self.0.len() == options_count as usize
+	}
+
+	pub fn is_multiple_votes(&self) -> bool {
+		self.non_zero_count() > 1
+	}
+
+	pub fn non_zero_count(&self) -> usize {
+		self.0.iter().filter(|&v| !v.is_zero()).count()
 	}
 
 	pub fn capital(&self) -> Balance {

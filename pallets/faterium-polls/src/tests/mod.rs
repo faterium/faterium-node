@@ -149,7 +149,7 @@ fn fast_forward_to(n: u64) {
 	}
 }
 
-fn begin_poll(who: u64, bnfs: Vec<(u64, u32)>, goal: Balance) -> PollIndex {
+fn begin_poll(who: u64, bnfs: Vec<(u64, u32)>, goal: Balance, multiple_votes: bool) -> PollIndex {
 	System::set_block_number(0);
 	let res = FateriumPolls::create_poll(
 		Origin::signed(who),
@@ -158,6 +158,7 @@ fn begin_poll(who: u64, bnfs: Vec<(u64, u32)>, goal: Balance) -> PollIndex {
 		RewardSettings::None,
 		goal,
 		3,
+		multiple_votes,
 		PollCurrency::Native,
 		1,
 		10,
@@ -186,6 +187,7 @@ fn begin_poll_with_asset(
 		RewardSettings::None,
 		10,
 		3,
+		false,
 		PollCurrency::Asset(0),
 		1,
 		10,
