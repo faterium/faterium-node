@@ -11,7 +11,7 @@ benchmarks! {
 	create_poll {
 		let s in 0 .. 10;
 		let caller: T::AccountId = whitelisted_caller();
-	}: _(RawOrigin::Signed(caller), Vec::new(), Vec::new(), RewardSettings::None, 100u32.into(), s as u8, PollCurrency::Native, 10u32.into(), 20u32.into())
+	}: _(RawOrigin::Signed(caller), Vec::new(), Vec::new(), RewardSettings::None, 100u32.into(), s as u8, true, PollCurrency::Native, 10u32.into(), 20u32.into())
 	verify {
 		assert_eq!(PollCount::<T>::get(), s.into());
 	}
