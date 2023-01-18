@@ -269,7 +269,7 @@ impl pallet_sudo::Config for Runtime {
 }
 
 parameter_types! {
-	pub const AssetDeposit: Balance = Balance::MIN;
+	pub const AssetDeposit: Balance = 0;
 	pub const AssetAccountDeposit: Balance = 0;
 	pub const ApprovalDeposit: Balance = 0;
 	pub const MetadataDepositBase: Balance = 0;

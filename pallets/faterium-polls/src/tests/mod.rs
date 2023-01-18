@@ -96,7 +96,7 @@ impl pallet_balances::Config for Test {
 }
 
 parameter_types! {
-	pub const AssetDeposit: Balance = Balance::MAX;
+	pub const AssetDeposit: Balance = 0;
 	pub const AssetAccountDeposit: Balance = 0;
 	pub const ApprovalDeposit: Balance = 0;
 	pub const MetadataDepositBase: Balance = 0;
@@ -177,7 +177,7 @@ fn begin_poll_with_asset(
 	System::set_block_number(0);
 	// Create asset
 	let asset_id = 0;
-	assert_ok!(Assets::force_create(Origin::root(), asset_id, who, false, 1));
+	assert_ok!(Assets::create(Origin::signed(who), asset_id, who, 1));
 	assert_ok!(Assets::mint(Origin::signed(who), asset_id, voter, balance));
 	// Create poll
 	let res = FateriumPolls::create_poll(
