@@ -432,12 +432,11 @@ impl<T: Config> Pallet<T> {
 			ensure!(total_issuance > BalanceOf::<T>::zero(), Error::<T>::InvalidPollCurrency);
 		}
 		// Get next poll_id from storage.
-		let poll_id = PollCount::<T>::get();
+		let mut poll_id = PollCount::<T>::get();
+		poll_id.saturating_inc();
 		PollDetailsOf::<T>::insert(poll_id, poll);
 		// Updates poll count.
-		let mut next_id = poll_id;
-		next_id.saturating_inc();
-		PollCount::<T>::put(next_id);
+		PollCount::<T>::put(poll_id);
 		// Actually schedule end of the poll.
 		if T::Scheduler::schedule_named(
 			(FATERIUM_POLLS_ID, poll_id).encode(),

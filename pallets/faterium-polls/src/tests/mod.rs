@@ -165,7 +165,7 @@ fn begin_poll(who: u64, bnfs: Vec<(u64, u32)>, goal: Balance, multiple_votes: bo
 	);
 	assert_ok!(res);
 	fast_forward_to(2);
-	0
+	1
 }
 
 fn begin_poll_with_asset(
@@ -194,7 +194,7 @@ fn begin_poll_with_asset(
 	);
 	assert_ok!(res);
 	fast_forward_to(2);
-	(0, asset_id)
+	(1, asset_id)
 }
 
 fn set_balances(acc: u64) {
